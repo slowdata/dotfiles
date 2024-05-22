@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+DOTFILES=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
+
+WIN_USERNAME=$(whoami.exe |sed -E s/'^.+\\([^\\]*)\r$'/'\1'/)
+
+wezterm_dir="/mnt/c/Users/${WIN_USERNAME}/.config/wezterm"
+
+rm -rf $wezterm_dir
+cp -r ./wezterm /mnt/c/Users/${WIN_USERNAME}/.config/wezterm/
+
+rm -rf $HOME/.config/tmux
+ln -s $DOTFILES/tmux $HOME/.config/tmux
