@@ -56,9 +56,11 @@ export OMARCHY_PATH="${OMARCHY_PATH:-$HOME/.local/share/omarchy}"
 [[ ":$PATH:" != *":$OMARCHY_PATH/bin:"* ]] && export PATH="$OMARCHY_PATH/bin:$PATH"
 export SUDO_EDITOR="$EDITOR"
 export BAT_THEME=ansi
+unalias open 2>/dev/null  # evitar conflito: bash/aliases define open() como funcao
 source $OMARCHY_PATH/default/bash/aliases
 source $OMARCHY_PATH/default/bash/envs
-unalias ga 2>/dev/null  # fns/worktrees define ga() como funcao; limpar o alias primeiro
+unalias ga 2>/dev/null  # fns/worktrees define ga() como funcao
+unalias gd 2>/dev/null  # fns/worktrees define gd() como funcao
 for f in $OMARCHY_PATH/default/bash/fns/*; do source "$f"; done
 
 # Aliases e funcoes pessoais (sobrepoem-se aos defaults do Omarchy acima)
@@ -133,7 +135,7 @@ export PATH="$PATH:$HOME/go/bin"
 export PATH="$PATH:$HOME/.config/composer/vendor/bin"
 export EDITOR=nvim
 
-. "$HOME/.local/share/../bin/env"
+[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
 
 # Proxy settings (desativado)
 #export http_proxy="http://172.20.15.100:3128"
