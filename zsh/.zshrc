@@ -21,10 +21,9 @@ zinit light Aloxaf/fzf-tab
 ZSH_DISABLE_COMPFIX=true
 
 # Add in snippets
-zinit snippet OMZP::git
-zinit snippet OMZP::ubuntu
+# OMZP::git removido — define 'ga' como alias e conflitua com fns/worktrees do Omarchy
+# OMZP::ubuntu removido — este sistema e Arch, nao Ubuntu
 zinit snippet OMZP::sudo
-zinit snippet OMZP::laravel
 zinit snippet OMZP::command-not-found
 
 # Load completions
@@ -52,31 +51,47 @@ zstyle ':completion:*' menu no
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'ls --color $realpath'
 zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
 
-# Aliases
-#
-# File system
-alias ls='eza -lh --group-directories-first --icons=auto'
-alias lsa='ls -a'
-alias lt='eza --tree --level=2 --long --icons --git'
-alias lta='lt -a'
-alias ff="fzf --preview 'bat --style=numbers --color=always {}'"
-#
-# Directories
-alias ..='cd ..'
-alias ...='cd ../..'
-alias ....='cd ../../..'
-#
-alias n='nvim'
-alias c='clear'
-alias phpshell='/usr/bin/php -a'
-alias art='artisan'
-alias sail='sh $([ -f sail ] && echo sail || echo vendor/bin/sail)'
+# Omarchy (aliases + envs + funcoes utilitarias, actualizados com omarchy-update)
+export OMARCHY_PATH="${OMARCHY_PATH:-$HOME/.local/share/omarchy}"
+[[ ":$PATH:" != *":$OMARCHY_PATH/bin:"* ]] && export PATH="$OMARCHY_PATH/bin:$PATH"
+export SUDO_EDITOR="$EDITOR"
+export BAT_THEME=ansi
+source $OMARCHY_PATH/default/bash/aliases
+source $OMARCHY_PATH/default/bash/envs
+unalias ga 2>/dev/null  # fns/worktrees define ga() como funcao; limpar o alias primeiro
+for f in $OMARCHY_PATH/default/bash/fns/*; do source "$f"; done
 
-alias open='xdg-open'
+# Aliases e funcoes pessoais (sobrepoem-se aos defaults do Omarchy acima)
+source ~/.aliases
+
+# Override de format-drive com sintaxe zsh (read -rp nao funciona em zsh)
+format-drive() {
+  if (( $# != 2 )); then
+    echo "Usage: format-drive <device> <name>"
+    echo "Example: format-drive /dev/sda 'My Stuff'"
+    echo -e "\nAvailable drives:"
+    lsblk -d -o NAME -n | awk '{print "/dev/"$1}'
+  else
+    echo "WARNING: This will completely erase all data on $1 and label it '$2'."
+    read "confirm?Are you sure you want to continue? (y/N): "
+    if [[ $confirm =~ ^[Yy]$ ]]; then
+      sudo wipefs -a "$1"
+      sudo dd if=/dev/zero of="$1" bs=1M count=100 status=progress
+      sudo parted -s "$1" mklabel gpt
+      sudo parted -s "$1" mkpart primary 1MiB 100%
+      sudo parted -s "$1" set 1 msftdata on
+      partition="$([[ $1 == *"nvme"* ]] && echo "${1}p1" || echo "${1}1")"
+      sudo partprobe "$1" || true
+      sudo udevadm settle || true
+      sudo mkfs.exfat -n "$2" "$partition"
+      echo "Drive $1 formatted as exFAT and labeled '$2'."
+    fi
+  fi
+}
 
 # Shell integrations
 eval "$(fzf --zsh)"
-eval "$(zoxide init --cmd cd zsh)"
+eval "$(zoxide init zsh)"
 
 # Setting Mise
 eval "$(mise activate zsh)"
@@ -84,86 +99,46 @@ eval "$(mise activate zsh)"
 # Oh-my-posh
 eval "$(oh-my-posh init zsh --config ~/.config/ohmyposh/zen.omp.json)"
 
-# --- SSH Agent via keychain ---
+# SSH Agent via keychain (so em shells interativos)
 if [[ -o interactive ]]; then
-  export KEYCHAIN_DIR="$HOME/.cache/keychain"
   key="$HOME/.ssh/dias_pgr_wsl_rsa"
   if [[ -f "$key" ]]; then
     eval "$(keychain --quiet --eval --timeout 480 "$key")"
   fi
 fi
 
-# --- Evitar Ctrl+S congelar o terminal (tmux leader) ---
+# Evitar Ctrl+S congelar o terminal (para tmux leader)
 if [[ -o interactive ]]; then
   stty -ixon -ixoff 2>/dev/null
 fi
 
-function sesh-sessions() {
-  {
-
-    exec </dev/tty
-    exec <&1
-    local session
-    session=$(sesh list -t -c | fzf --height 40% --reverse --border-label ' sesh ' --border --prompt '⚡  ')
-    zle reset-prompt > /dev/null 2>&1 || true
-    [[ -z "$session" ]] && return
-    sesh connect $session
-
-  }
-}
-
-zle     -N             sesh-sessions
+# Selector de sessoes sesh (Alt+S) — funcao definida em ~/.aliases
+zle -N sesh-sessions
 bindkey -M emacs '\es' sesh-sessions
 bindkey -M vicmd '\es' sesh-sessions
 bindkey -M viins '\es' sesh-sessions
 
-
-# eval "$(zellij setup --generate-auto-start zsh)"
-
-
-
-# --- Keybindings clássicos (emacs style) ---
+# Keybindings classicos (emacs style)
 bindkey -e
-bindkey '^A' beginning-of-line       # Ctrl+A → início
-bindkey '^E' end-of-line             # Ctrl+E → fim
-bindkey '^P' history-beginning-search-backward  # Ctrl+P → histórico acima (prefixo)
-bindkey '^N' history-beginning-search-forward   # Ctrl+N → histórico abaixo (prefixo)
-# bindkey '^R' history-incremental-search-backward # Ctrl+R → pesquisa no histórico
-# bindkey '^S' history-incremental-search-forward  # Ctrl+S → pesquisa para a frente
-bindkey "\e[3~" delete-char          # Delete → apaga à direita
-bindkey "\e[1~" beginning-of-line    # Home
-bindkey "\e[4~" end-of-line          # End
+bindkey '^A' beginning-of-line
+bindkey '^E' end-of-line
+bindkey '^P' history-beginning-search-backward
+bindkey '^N' history-beginning-search-forward
+bindkey "\e[3~" delete-char
+bindkey "\e[1~" beginning-of-line
+bindkey "\e[4~" end-of-line
 
-export PATH=$HOME/.local/bin:$PATH
+export PATH="$HOME/.local/bin:$PATH"
+export PATH="$PATH:$HOME/go/bin"
+export PATH="$PATH:$HOME/.config/composer/vendor/bin"
+export EDITOR=nvim
 
-[ -f "$HOME/.local/bin/env" ] && source "$HOME/.local/bin/env"
-export PATH=$PATH:$HOME/go/bin
+. "$HOME/.local/share/../bin/env"
 
-# Proxy settings
+# Proxy settings (desativado)
 #export http_proxy="http://172.20.15.100:3128"
 #export https_proxy="http://172.20.15.100:3128"
 #export HTTP_PROXY="http://172.20.15.100:3128"
 #export HTTPS_PROXY="http://172.20.15.100:3128"
 #export no_proxy="localhost,127.0.0.1,::1,janus.dv,dev.localhost,*.pgr.pt,*.portalcos.pt,10.176.0.0/16,172.20.0.0/16"
 #export NO_PROXY="localhost,127.0.0.1,::1,janus.dv,dev.localhost,*.pgr.pt,*.portalcos.pt,10.176.0.0/16,172.20.0.0/16"
-
-
-# Composer packages
-export PATH="$HOME/.config/composer/vendor/bin:$PATH"
-
-[ -f "$HOME/.local/bin/env" ] && source "$HOME/.local/bin/env"
-
-# Atalho para criar/entrar em sessões tmux
-tmx () {
-  if [ -z "$1" ]; then
-    echo "Uso: tmx <nome-da-sessao>"
-    return 1
-  fi
-
-  if [ -n "$TMUX" ]; then
-    tmux switch-client -t "$1" 2>/dev/null || tmux new-session -d -s "$1" \; switch-client -t "$1"
-  else
-    tmux attach -t "$1" 2>/dev/null || tmux new -s "$1"
-  fi
-}
-
