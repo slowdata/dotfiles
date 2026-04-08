@@ -87,7 +87,10 @@ eval "$(oh-my-posh init zsh --config ~/.config/ohmyposh/zen.omp.json)"
 # --- SSH Agent via keychain ---
 if [[ -o interactive ]]; then
   export KEYCHAIN_DIR="$HOME/.cache/keychain"
-  eval "$(keychain --quiet --eval --timeout 480 ~/.ssh/dias_pgr_wsl_rsa ~/.ssh/dias_pgr_wsl_rsa)"
+  key="$HOME/.ssh/dias_pgr_wsl_rsa"
+  if [[ -f "$key" ]]; then
+    eval "$(keychain --quiet --eval --timeout 480 "$key")"
+  fi
 fi
 
 # --- Evitar Ctrl+S congelar o terminal (tmux leader) ---
@@ -148,8 +151,7 @@ export PATH=$PATH:$HOME/go/bin
 # Composer packages
 export PATH="$HOME/.config/composer/vendor/bin:$PATH"
 
-. "$HOME/.local/share/../bin/env"
-
+[ -f "$HOME/.local/bin/env" ] && source "$HOME/.local/bin/env"
 
 # Atalho para criar/entrar em sessões tmux
 tmx () {
