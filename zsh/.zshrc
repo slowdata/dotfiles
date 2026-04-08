@@ -57,6 +57,7 @@ export OMARCHY_PATH="${OMARCHY_PATH:-$HOME/.local/share/omarchy}"
 export SUDO_EDITOR="$EDITOR"
 export BAT_THEME=ansi
 unalias open 2>/dev/null  # evitar conflito: bash/aliases define open() como funcao
+unalias n 2>/dev/null    # bash/aliases define n() como funcao
 source $OMARCHY_PATH/default/bash/aliases
 source $OMARCHY_PATH/default/bash/envs
 unalias ga 2>/dev/null  # fns/worktrees define ga() como funcao
