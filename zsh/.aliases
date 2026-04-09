@@ -52,9 +52,6 @@ alias sail='sh $([ -f sail ] && echo sail || echo vendor/bin/sail)'
 alias sync-now='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -auto -batch -prefer newer && unison obsidian && echo "Sync completo!"'
 alias sync-check='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -batch && unison /home/dias/Sync/Obsidian /home/dias/Dropbox/Obsidian -batch'
 
-# Abrir ficheiro markdown no Typora
-md() { typora "$@" </dev/null >/dev/null 2>&1 &! }
-
 # Abrir Microsoft Teams numa janela Chromium isolada
 teams() {
   local dir="$HOME/.config/chromium-teams"
