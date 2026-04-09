@@ -25,9 +25,9 @@ t() {
   fi
 }
 
-# open = desliga do terminal com setsid (omarchy tem versao basica)
+# open = abre com xdg-open desligado do terminal
 unset -f open 2>/dev/null
-open() { setsid xdg-open "$*" </dev/null >/dev/null 2>&1 & }
+open() { xdg-open "$@" >/dev/null 2>&1 & }
 
 # Selector de sessoes sesh (Alt+S) — o zle -N e bindkey ficam no .zshrc
 function sesh-sessions() {
