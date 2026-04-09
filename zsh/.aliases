@@ -25,9 +25,21 @@ t() {
   fi
 }
 
-# open = abre com xdg-open desligado do terminal
+# open = abre ficheiros desligado do terminal; .md vai directo ao Typora
 unset -f open 2>/dev/null
-open() { xdg-open "$@" >/dev/null 2>&1 & }
+open() {
+  case "$1" in
+    *.md) typora "$@" </dev/null >/dev/null 2>&1 &! ;;
+    *)
+      local mimetype
+      mimetype=$(xdg-mime query filetype "$1" 2>/dev/null)
+      case "$mimetype" in
+        text/*) nvim "$@" ;;
+        *)      xdg-open "$@" </dev/null >/dev/null 2>&1 &! ;;
+      esac
+      ;;
+  esac
+}
 
 # Selector de sessoes sesh (Alt+S) — o zle -N e bindkey ficam no .zshrc
 function sesh-sessions() {
