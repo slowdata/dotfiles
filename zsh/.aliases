@@ -29,7 +29,7 @@ t() {
 unset -f open 2>/dev/null
 open() {
   case "$1" in
-    *.md) typora "$@" </dev/null >/dev/null 2>&1 &! ;;
+    *.md) typora --disable-gpu "$@" </dev/null >/dev/null 2>&1 &! ;;
     *)
       local mimetype
       mimetype=$(xdg-mime query filetype "$1" 2>/dev/null)
