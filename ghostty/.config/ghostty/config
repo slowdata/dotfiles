@@ -32,20 +32,20 @@ quick-terminal-autohide = false
 keybind = global:super+backquote=toggle_quick_terminal
 keybind = global:f12=toggle_quick_terminal
 
-# Splits with tmux-like prefix
-keybind = ctrl+a>v=new_split:right
-keybind = ctrl+a>s=new_split:down
-keybind = ctrl+a>h=goto_split:left
-keybind = ctrl+a>j=goto_split:down
-keybind = ctrl+a>k=goto_split:up
-keybind = ctrl+a>l=goto_split:right
-keybind = ctrl+a>shift+arrow_left=resize_split:left,10
-keybind = ctrl+a>shift+arrow_down=resize_split:down,10
-keybind = ctrl+a>shift+arrow_up=resize_split:up,10
-keybind = ctrl+a>shift+arrow_right=resize_split:right,10
-keybind = ctrl+a>z=toggle_split_zoom
-keybind = ctrl+a>x=close_surface
-keybind = ctrl+a>==equalize_splits
+# Splits with tmux-like prefix (ctrl+space)
+keybind = ctrl+space>v=new_split:right
+keybind = ctrl+space>s=new_split:down
+keybind = ctrl+space>h=goto_split:left
+keybind = ctrl+space>j=goto_split:down
+keybind = ctrl+space>k=goto_split:up
+keybind = ctrl+space>l=goto_split:right
+keybind = ctrl+space>shift+arrow_left=resize_split:left,10
+keybind = ctrl+space>shift+arrow_down=resize_split:down,10
+keybind = ctrl+space>shift+arrow_up=resize_split:up,10
+keybind = ctrl+space>shift+arrow_right=resize_split:right,10
+keybind = ctrl+space>z=toggle_split_zoom
+keybind = ctrl+space>x=close_surface
+keybind = ctrl+space>==equalize_splits
 
 # Quality of life
 keybind = ctrl+shift+p=toggle_command_palette
