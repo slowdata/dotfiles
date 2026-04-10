@@ -1,15 +1,17 @@
-# Aliases e funcoes pessoais do Dias
-# Sobrepoem-se aos defaults do Omarchy carregados no .zshrc
+# Aliases e funções pessoais do Dias
 
-# c = limpar terminal (omarchy tem c='opencode')
-unalias c 2>/dev/null
-alias c='clear'
-
-# o = opencode (liberta o c para clear)
+alias c='clear'           # omarchy tem c='opencode'
 alias o='opencode'
+alias phpshell='/usr/bin/php -a'
+alias art='artisan'
+alias sail='sh $([ -f sail ] && echo sail || echo vendor/bin/sail)'
 
-# t = tmux smart: retoma sessao existente ou cria nova
-# Uso: t [nome]  ->  sem nome usa "main"; t . usa o nome do dir atual
+# Sync manual Sync <-> Dropbox
+alias sync-now='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -auto -batch -prefer newer && unison obsidian && echo "Sync completo!"'
+alias sync-check='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -batch && unison /home/dias/Sync/Obsidian /home/dias/Dropbox/Obsidian -batch'
+
+# Atalho para criar/entrar em sessões tmux
+# Uso: t [nome]  →  sem nome abre/retoma sessão "main"
 unalias t 2>/dev/null
 t() {
   local name
@@ -25,44 +27,21 @@ t() {
   fi
 }
 
-# open = abre ficheiros desligado do terminal; .md vai directo ao Typora
-unset -f open 2>/dev/null
-open() {
-  case "$1" in
-    *.md) typora --disable-gpu "$@" </dev/null >/dev/null 2>&1 &! ;;
-    *)
-      local mimetype
-      mimetype=$(xdg-mime query filetype "$1" 2>/dev/null)
-      case "$mimetype" in
-        text/*) nvim "$@" ;;
-        *)      xdg-open "$@" </dev/null >/dev/null 2>&1 &! ;;
-      esac
-      ;;
-  esac
-}
-
-# Selector de sessoes sesh (Alt+S) — o zle -N e bindkey ficam no .zshrc
+# Selector de sessões sesh (Alt+S)
 function sesh-sessions() {
   {
     exec </dev/tty
     exec <&1
     local session
-    session=$(sesh list -t -c | fzf --height 40% --reverse --border-label ' sesh ' --border --prompt '  ')
+    session=$(sesh list -t -c | fzf --height 40% --reverse --border-label ' sesh ' --border --prompt '⚡  ')
     zle reset-prompt > /dev/null 2>&1 || true
     [[ -z "$session" ]] && return
     sesh connect $session
   }
 }
 
-# --- Aliases pessoais nao incluidos no Omarchy ---
-
-alias phpshell='/usr/bin/php -a'
-alias art='artisan'
-alias sail='sh $([ -f sail ] && echo sail || echo vendor/bin/sail)'
-
-# Sync manual Sync <-> Dropbox
-alias sync-now='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -auto -batch -prefer newer && unison obsidian && echo "Sync completo!"'
-alias sync-check='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -batch && unison /home/dias/Sync/Obsidian /home/dias/Dropbox/Obsidian -batch'
+# Abrir ficheiro markdown no Typora
+md() { typora "$@" </dev/null >/dev/null 2>&1 &! }
 
 # Abrir Microsoft Teams numa janela Chromium isolada
 teams() {
@@ -76,13 +55,28 @@ teams() {
     </dev/null >/dev/null 2>&1 &!
 }
 
+# Override do open do Omarchy: desligar do terminal sem perder sessão Wayland
+open() {
+  local mimetype
+  mimetype=$(xdg-mime query filetype "$1" 2>/dev/null)
+  case "$1" in
+    *.md) typora "$@" </dev/null >/dev/null 2>&1 &! ;;
+    *)
+      case "$mimetype" in
+        text/*) nvim "$@" ;;
+        *)      xdg-open "$@" </dev/null >/dev/null 2>&1 &! ;;
+      esac
+      ;;
+  esac
+}
+
 # Ajuda contextual git
 ghelp() {
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-    echo "Nao estas dentro de um repositorio git."
+    echo "Não estás dentro de um repositório git."
     echo ""
-    echo "  git clone <url>       -> copiar um repo existente"
-    echo "  git init              -> criar um repo novo aqui"
+    echo "  git clone <url>       → copiar um repo existente"
+    echo "  git init              → criar um repo novo aqui"
     return
   fi
 
@@ -105,41 +99,41 @@ ghelp() {
   local ahead
   ahead=$(git rev-list @{u}..HEAD 2>/dev/null | wc -l | tr -d ' ')
 
-  echo "-- Estado atual ------------------------------------------"
+  echo "── Estado atual ──────────────────────────"
   echo "  Branch: $branch"
-  $is_worktree && echo "  (estas numa worktree)"
+  $is_worktree && echo "  (estás numa worktree)"
   echo ""
 
   if $has_changes; then
-    echo "  Tens alteracoes por guardar:"
+    echo "  Tens alterações por guardar:"
     git status --short
     echo ""
-    echo "-- O que usar agora --------------------------------------"
-    echo "  gcam 'descricao'   -> guardar todas as alteracoes com mensagem"
-    echo "  gcad               -> corrigir a mensagem do ultimo commit"
+    echo "── O que usar agora ──────────────────────"
+    echo "  gcam 'descrição'   → guardar todas as alterações com mensagem"
+    echo "  gcad               → corrigir a mensagem do último commit"
     if $has_untracked; then
       echo ""
       echo "  Nota: tens ficheiros novos (??). O gcam inclui-os automaticamente"
-      echo "  se fizeres  git add <ficheiro>  primeiro, ou ignora-os se nao precisares."
+      echo "  se fizeres  git add <ficheiro>  primeiro, ou ignora-os se não precisares."
     fi
   else
-    echo "  Repo limpo -- nada por guardar."
+    echo "  Repo limpo — nada por guardar."
     echo ""
-    echo "-- O que usar agora --------------------------------------"
+    echo "── O que usar agora ──────────────────────"
     if [[ "$ahead" -gt 0 ]]; then
-      echo "  git push           -> enviar $ahead commit(s) para o servidor"
+      echo "  git push           → enviar $ahead commit(s) para o servidor"
     else
       echo "  Tudo sincronizado. Podes editar ficheiros e depois usar:"
-      echo "  gcam 'descricao'   -> guardar alteracoes quando estiveres pronto"
+      echo "  gcam 'descrição'   → guardar alterações quando estiveres pronto"
     fi
   fi
 
   if $is_worktree; then
     echo ""
-    echo "  gd                 -> remover esta worktree quando acabares"
+    echo "  gd                 → remover esta worktree quando acabares"
   else
     echo ""
-    echo "  ga <nome>          -> criar uma copia isolada do projeto para experimentar algo"
+    echo "  ga <nome>          → criar uma cópia isolada do projeto para experimentar algo"
   fi
-  echo "----------------------------------------------------------"
+  echo "──────────────────────────────────────────"
 }

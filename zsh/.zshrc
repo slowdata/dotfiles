@@ -22,7 +22,7 @@ ZSH_DISABLE_COMPFIX=true
 
 # Add in snippets
 # OMZP::git removido — define 'ga' como alias e conflitua com fns/worktrees do Omarchy
-# OMZP::ubuntu removido — este sistema e Arch, nao Ubuntu
+# OMZP::ubuntu removido — este sistema é Arch, não Ubuntu
 zinit snippet OMZP::sudo
 zinit snippet OMZP::command-not-found
 
@@ -51,23 +51,20 @@ zstyle ':completion:*' menu no
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'ls --color $realpath'
 zstyle ':fzf-tab:complete:__zoxide_z:*' fzf-preview 'ls --color $realpath'
 
-# Omarchy (aliases + envs + funcoes utilitarias, actualizados com omarchy-update)
+# Omarchy (aliases + envs + funções utilitárias, actualizados com omarchy-update)
 export OMARCHY_PATH="${OMARCHY_PATH:-$HOME/.local/share/omarchy}"
 [[ ":$PATH:" != *":$OMARCHY_PATH/bin:"* ]] && export PATH="$OMARCHY_PATH/bin:$PATH"
 export SUDO_EDITOR="$EDITOR"
 export BAT_THEME=ansi
-unalias open 2>/dev/null  # evitar conflito: bash/aliases define open() como funcao
-unalias n 2>/dev/null    # bash/aliases define n() como funcao
 source $OMARCHY_PATH/default/bash/aliases
 source $OMARCHY_PATH/default/bash/envs
-unalias ga 2>/dev/null  # fns/worktrees define ga() como funcao
-unalias gd 2>/dev/null  # fns/worktrees define gd() como funcao
+unalias ga 2>/dev/null  # fns/worktrees define ga() como função; limpar o alias primeiro
 for f in $OMARCHY_PATH/default/bash/fns/*; do source "$f"; done
 
-# Aliases e funcoes pessoais (sobrepoem-se aos defaults do Omarchy acima)
+# Aliases e funções pessoais (sobrepõem-se aos defaults do Omarchy acima)
 source ~/.aliases
 
-# Override de format-drive com sintaxe zsh (read -rp nao funciona em zsh)
+# Override de format-drive com sintaxe zsh (read -rp não funciona em zsh)
 format-drive() {
   if (( $# != 2 )); then
     echo "Usage: format-drive <device> <name>"
@@ -102,46 +99,33 @@ eval "$(mise activate zsh)"
 # Oh-my-posh
 eval "$(oh-my-posh init zsh --config ~/.config/ohmyposh/zen.omp.json)"
 
-# SSH Agent via keychain (so em shells interativos)
-if [[ -o interactive ]]; then
-  key="$HOME/.ssh/dias_pgr_wsl_rsa"
-  if [[ -f "$key" ]]; then
-    eval "$(keychain --quiet --eval --timeout 480 "$key")"
-  fi
-fi
-
 # Evitar Ctrl+S congelar o terminal (para tmux leader)
 if [[ -o interactive ]]; then
   stty -ixon -ixoff 2>/dev/null
 fi
 
-# Selector de sessoes sesh (Alt+S) — funcao definida em ~/.aliases
+# Selector de sessões sesh (Alt+S) — função definida em ~/.aliases
 zle -N sesh-sessions
 bindkey -M emacs '\es' sesh-sessions
 bindkey -M vicmd '\es' sesh-sessions
 bindkey -M viins '\es' sesh-sessions
 
-# Keybindings classicos (emacs style)
+# Keybindings clássicos (emacs style)
 bindkey -e
-bindkey '^A' beginning-of-line
-bindkey '^E' end-of-line
-bindkey '^P' history-beginning-search-backward
-bindkey '^N' history-beginning-search-forward
-bindkey "\e[3~" delete-char
-bindkey "\e[1~" beginning-of-line
-bindkey "\e[4~" end-of-line
+bindkey '^A' beginning-of-line       # Ctrl+A → início
+bindkey '^E' end-of-line             # Ctrl+E → fim
+bindkey '^P' history-beginning-search-backward  # Ctrl+P → histórico acima (prefixo)
+bindkey '^N' history-beginning-search-forward   # Ctrl+N → histórico abaixo (prefixo)
+bindkey "\e[3~" delete-char          # Delete → apaga à direita
+bindkey "\e[1~" beginning-of-line    # Home
+bindkey "\e[4~" end-of-line          # End
 
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$PATH:$HOME/go/bin"
-export PATH="$PATH:$HOME/.config/composer/vendor/bin"
+export PATH="$PATH:$HOME/.composer/vendor/bin"
 export EDITOR=nvim
 
-[ -f "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+. "$HOME/.local/share/../bin/env"
 
-# Proxy settings (desativado)
-#export http_proxy="http://172.20.15.100:3128"
-#export https_proxy="http://172.20.15.100:3128"
-#export HTTP_PROXY="http://172.20.15.100:3128"
-#export HTTPS_PROXY="http://172.20.15.100:3128"
-#export no_proxy="localhost,127.0.0.1,::1,janus.dv,dev.localhost,*.pgr.pt,*.portalcos.pt,10.176.0.0/16,172.20.0.0/16"
-#export NO_PROXY="localhost,127.0.0.1,::1,janus.dv,dev.localhost,*.pgr.pt,*.portalcos.pt,10.176.0.0/16,172.20.0.0/16"
+# Config específica por máquina (SSH keys, paths locais, proxy...)
+[[ -f ~/.zshrc.local ]] && source ~/.zshrc.local
