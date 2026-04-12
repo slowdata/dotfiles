@@ -39,8 +39,12 @@ dotfiles/
 │   └── .config/ghostty/config      # Config do terminal principal
 ├── ohmyposh/
 │   └── .config/ohmyposh/           # Tema zen do oh-my-posh
+├── pi/
+│   └── .pi/agent/
+│       ├── AGENTS.md               # Contexto global (máquinas, SSH, etc.)
+│       └── skills/omarchy/         # Skill omarchy para o pi
 ├── tmux/
-│   └── .tmux.conf                  # Config tmux (uso secundário)
+│   └── .config/tmux/tmux.conf     # Config tmux (uso secundário)
 ├── wezterm/
 │   └── wezterm.lua                 # Config wezterm (Windows/WSL)
 ├── zsh/
@@ -65,7 +69,7 @@ git clone git@github.com:slowdata/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 
 # 2. Aplicar com stow (cria symlinks em ~)
-stow ghostty ohmyposh tmux zsh
+stow ghostty ohmyposh tmux zsh pi
 
 # 3. (Opcional) wezterm — só em Windows/WSL
 stow wezterm
@@ -101,7 +105,7 @@ git pull
 
 | Máquina       | Stow aplicado | Actualizado |
 |---------------|:-------------:|:-----------:|
-| `ossoarchy`   | ❌ Não        | ❌ Não      |
+| `ossoarchy`   | ✅ Sim        | ✅ Sim      |
 | `viarchy`     | ?             | ?           |
 | `omarchy-pgr` | ?             | ?           |
 
