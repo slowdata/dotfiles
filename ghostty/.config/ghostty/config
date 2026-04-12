@@ -49,8 +49,6 @@ keybind = ctrl+space>==equalize_splits
 
 # Quality of life
 keybind = ctrl+shift+p=toggle_command_palette
-keybind = ctrl+shift+,=open_config
-keybind = ctrl+shift+.=reload_config
 
 # Existing clipboard bindings
 keybind = shift+insert=paste_from_clipboard
