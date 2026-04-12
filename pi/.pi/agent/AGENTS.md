@@ -37,6 +37,54 @@ Quando não for claro, **pergunta qual das máquinas** antes de alterar.
 
 ---
 
+## Projectos Activos (work in progress)
+
+> ⚠️ Esta informação é do PC pessoal (ossoarchy). O trabalho principal destes projectos
+> está em `omarchy-pgr`. Pode haver mais contexto e código actualizado nessa máquina.
+
+Prioridade de execução (por ordem):
+
+### 1. eEvidence — Upgrade 4.0.2 ⚡ urgente
+- **O quê:** Sistema EU de cooperação judiciária cross-border (eEvidence directive)
+- **Instância:** PT_PGR (Procuradoria-Geral da República)
+- **Tarefa:** Upgrade para versão 4.0.2 e validar em QA
+- **Deadline:** ~7 dias
+- **Código local:** `~/Code/pgr/eevidence/`
+- **QA server:** alias SSH `eEvidenceQLD`
+- **Stack:** Java/Maven multi-module, Docker, Keycloak, Tomcat
+- **Contexto:** Equipa interna PGR assumiu ownership completo (sem Linkare desde 2024)
+- **0/4 subtarefas** concluídas
+
+### 2. Forgejo — Instalar no novo servidor
+- **O quê:** Instalar Forgejo (git self-hosted) em servidor novo
+- **Deadline:** 1 Maio
+- **Data início:** Amanhã
+- **0/6 subtarefas** concluídas
+
+### 3. Comunicações ao DCIAP — Novo servidor
+- **O quê:** Aplicação Laravel 12 + Inertia + Vue 3 para exportação de comunicações hierárquicas ao DCIAP
+- **Tarefa:** Colocar aplicação em funcionamento no novo servidor
+- **Data:** 20 Abril
+- **Código local:** `~/Code/pgr/comunicacoes/`
+- **Stack:** Laravel 12, Vue 3, Inertia.js, Tailwind, MySQL (SIMP + PROGEST)
+- **0/4 subtarefas** concluídas
+
+### 4. SIMP + PROGEST — Refactoring (sem deadline imediata)
+- **O quê:** SIMP é uma aplicação PHP 7.4 monolítica do Ministério Público (4800+ ficheiros)
+- **Tarefa:** Melhorar Views e Controllers (metodologia Paul M. Jones — Modernizing Legacy PHP)
+- **Código local:** `~/Code/pgr/simp/`
+- **Stack:** PHP 7.4, MySQL 5.7, jQuery, Bootstrap 4, ExtJS 6, Docker
+- **Refactoring incremental** — não saltar passos, app sempre funcional
+- **1/1 subtarefas** concluídas (fase actual)
+
+### 5. Microserviço de Certidões
+- **O quê:** Microserviço para gerar certidões
+- **Data:** 20 Abril — **Deadline:** 20 Maio
+- **0/5 subtarefas** concluídas
+- Sem mais contexto disponível em ossoarchy — ver omarchy-pgr
+
+---
+
 ## Dotfiles
 
 Todas as máquinas Linux partilham o mesmo repositório de dotfiles:
