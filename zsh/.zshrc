@@ -125,7 +125,12 @@ export PATH="$PATH:$HOME/go/bin"
 export PATH="$PATH:$HOME/.composer/vendor/bin"
 export EDITOR=nvim
 
+[[ -f ~/.proxyenv ]] && source ~/.proxyenv
+
+
 . "$HOME/.local/share/../bin/env"
+
+export GRAVAR_ONLY_RECORD=true
 
 # Config específica por máquina (SSH keys, paths locais, proxy...)
 [[ -f ~/.zshrc.local ]] && source ~/.zshrc.local

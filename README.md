@@ -43,6 +43,9 @@ dotfiles/
 │   └── .pi/agent/
 │       ├── AGENTS.md               # Contexto global (máquinas, SSH, etc.)
 │       └── skills/omarchy/         # Skill omarchy para o pi
+├── localbin/
+│   └── .local/bin/
+│       └── todoist-add             # Helper CLI para criar tarefas via API Todoist
 ├── tmux/
 │   └── .config/tmux/tmux.conf     # Config tmux (uso secundário)
 ├── wezterm/
@@ -69,7 +72,7 @@ git clone git@github.com:slowdata/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 
 # 2. Aplicar com stow (cria symlinks em ~)
-stow ghostty ohmyposh tmux zsh pi
+stow ghostty ohmyposh tmux zsh pi localbin
 
 # 3. (Opcional) wezterm — só em Windows/WSL
 stow wezterm
@@ -201,6 +204,7 @@ Exemplo de override: `c='clear'` substitui o `c='opencode'` do Omarchy.
 export DOCKER_HOST=...
 source ~/.ssh/agent.sh
 export HTTP_PROXY=...
+export TODOIST_API_TOKEN=...
 ```
 
 ---
@@ -220,6 +224,7 @@ export HTTP_PROXY=...
 | `typora`     | Editor Markdown visual                     |
 | `opencode`   | AI CLI (alias `o`)                         |
 | `stow`       | Gestão de dotfiles via symlinks            |
+| `todoist-add`| Criar tarefas na Todoist via API REST      |
 
 ---
 
@@ -227,6 +232,31 @@ export HTTP_PROXY=...
 
 Config mantida no repo para uso no workstation Windows com WSL Ubuntu.
 Não é usada nas máquinas Linux.
+
+---
+
+## Todoist helper
+
+Script incluído em `~/.local/bin/todoist-add` (via pacote `localbin/`).
+
+### Configuração
+Definir o token da API na config local da máquina:
+
+```bash
+export TODOIST_API_TOKEN="..."
+```
+
+Sugestão: guardar em `~/.zshrc.local`.
+
+### Exemplos
+
+```bash
+todoist-add "Rever follow-up goAML/PROGEST em PROD" \
+  --desc "Ver logs temporários, remover debug, apertar permissões e fechar documentação" \
+  --due "in 1 week"
+
+todoist-add "Preparar relatório semanal" --due "tomorrow" --priority 3
+```
 
 ---
 

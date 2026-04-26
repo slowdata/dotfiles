@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  todoist-add "conteudo" [--desc "descrição"] [--due "in 1 week"] [--project "id-ou-nome"] [--priority 1-4]
+
+Examples:
+  todoist-add "Rever follow-up goAML/PROGEST em PROD" \
+    --desc "Ver logs temporários, remover debug, apertar permissões e fechar documentação" \
+    --due "in 1 week"
+
+Required env:
+  TODOIST_API_TOKEN   Token da API REST da Todoist
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" || $# -eq 0 ]]; then
+  usage
+  exit 0
+fi
+
+if [[ -z ${TODOIST_API_TOKEN:-} ]]; then
+  echo "Erro: variável TODOIST_API_TOKEN não definida." >&2
+  echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.zshrc.local" >&2
+  exit 1
+fi
+
+content=""
+description=""
+due_string=""
+project_id=""
+priority=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --desc|--description)
+      description=${2:-}
+      shift 2
+      ;;
+    --due)
+      due_string=${2:-}
+      shift 2
+      ;;
+    --project)
+      project_id=${2:-}
+      shift 2
+      ;;
+    --priority)
+      priority=${2:-}
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Opção desconhecida: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -z $content ]]; then
+        content=$1
+      else
+        echo "Argumento extra inesperado: $1" >&2
+        usage >&2
+        exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ -z $content ]]; then
+  echo "Erro: falta o conteúdo da tarefa." >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ -n $priority && ! $priority =~ ^[1-4]$ ]]; then
+  echo "Erro: --priority tem de estar entre 1 e 4." >&2
+  exit 1
+fi
+
+payload=$(CONTENT="$content" DESCRIPTION="$description" DUE_STRING="$due_string" PROJECT_ID="$project_id" PRIORITY="$priority" python3 <<'PY'
+import json, os
+payload = {"content": os.environ["CONTENT"]}
+if os.environ.get("DESCRIPTION"):
+    payload["description"] = os.environ["DESCRIPTION"]
+if os.environ.get("DUE_STRING"):
+    payload["due_string"] = os.environ["DUE_STRING"]
+if os.environ.get("PROJECT_ID"):
+    payload["project_id"] = os.environ["PROJECT_ID"]
+if os.environ.get("PRIORITY"):
+    payload["priority"] = int(os.environ["PRIORITY"])
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)
+
+response=$(curl -fsS \
+  -X POST "https://api.todoist.com/rest/v2/tasks" \
+  -H "Authorization: Bearer ${TODOIST_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -H "X-Request-Id: $(uuidgen 2>/dev/null || python3 - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+)" \
+  --data "$payload")
+
+if command -v python3 >/dev/null 2>&1; then
+  RESPONSE="$response" python3 <<'PY'
+import json, os
+resp = json.loads(os.environ["RESPONSE"])
+print("Tarefa criada com sucesso")
+print(f"- id: {resp.get('id', '')}")
+print(f"- conteúdo: {resp.get('content', '')}")
+if resp.get('url'):
+    print(f"- url: {resp['url']}")
+if resp.get('due') and resp['due'].get('string'):
+    print(f"- due: {resp['due']['string']}")
+PY
+else
+  echo "$response"
+fi
