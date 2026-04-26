@@ -128,7 +128,7 @@ export EDITOR=nvim
 [[ -f ~/.proxyenv ]] && source ~/.proxyenv
 
 
-. "$HOME/.local/share/../bin/env"
+[[ -f "$HOME/.local/bin/env" ]] && . "$HOME/.local/bin/env"
 
 export GRAVAR_ONLY_RECORD=true
 
