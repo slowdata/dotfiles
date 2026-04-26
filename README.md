@@ -222,9 +222,14 @@ export TODOIST_API_TOKEN=...
 | `bat`        | cat com syntax highlight (tema: ansi)      |
 | `unison`     | Sync bidirecional Sync↔Dropbox             |
 | `typora`     | Editor Markdown visual                     |
-| `opencode`   | AI CLI (alias `o`)                         |
-| `stow`       | Gestão de dotfiles via symlinks            |
-| `todoist-add`| Criar tarefas na Todoist via API REST      |
+| `opencode`        | AI CLI (alias `o`)                         |
+| `stow`            | Gestão de dotfiles via symlinks            |
+| `todoist-add`     | Criar tarefas na Todoist via API REST      |
+| `todoist-list`    | Listar tarefas ativas / por filtro         |
+| `todoist-today`   | Listar tarefas de hoje                     |
+| `todoist-overdue` | Listar tarefas atrasadas                   |
+| `todoist-urgent`  | Listar tarefas urgentes (today/overdue/p1) |
+| `todoist-projects`| Listar projetos da Todoist                 |
 
 ---
 
@@ -235,9 +240,9 @@ Não é usada nas máquinas Linux.
 
 ---
 
-## Todoist helper
+## Todoist helpers
 
-Script incluído em `~/.local/bin/todoist-add` (via pacote `localbin/`).
+Scripts incluídos em `~/.local/bin/` (via pacote `localbin/`).
 
 ### Configuração
 Definir o token da API na config local da máquina:
@@ -256,6 +261,13 @@ todoist-add "Rever follow-up goAML/PROGEST em PROD" \
   --due "in 1 week"
 
 todoist-add "Preparar relatório semanal" --due "tomorrow" --priority 3
+
+todoist-list
+todoist-list --filter "today | overdue"
+todoist-today
+todoist-overdue
+todoist-urgent
+todoist-projects
 ```
 
 ---

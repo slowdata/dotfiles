@@ -103,8 +103,10 @@ print(json.dumps(payload, ensure_ascii=False))
 PY
 )
 
+api_url="https://api.todoist.com/api/v1/tasks"
+
 response=$(curl -fsS \
-  -X POST "https://api.todoist.com/rest/v2/tasks" \
+  -X POST "$api_url" \
   -H "Authorization: Bearer ${TODOIST_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -H "X-Request-Id: $(uuidgen 2>/dev/null || python3 - <<'PY'

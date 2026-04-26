@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  todoist-list [--filter "query"] [--limit N] [--json]
+
+Examples:
+  todoist-list
+  todoist-list --filter "today | overdue"
+  todoist-list --filter "p1 & today" --limit 20
+
+Notes:
+  - Sem --filter, lista tarefas ativas.
+  - Com --filter, usa a sintaxe de filtros da Todoist.
+
+Required env:
+  TODOIST_API_TOKEN   Token da API REST da Todoist
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ -z ${TODOIST_API_TOKEN:-} ]]; then
+  echo "Erro: variável TODOIST_API_TOKEN não definida." >&2
+  echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.zshrc.local" >&2
+  exit 1
+fi
+
+filter=""
+limit="50"
+json_output="false"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --filter)
+      filter=${2:-}
+      shift 2
+      ;;
+    --limit)
+      limit=${2:-}
+      shift 2
+      ;;
+    --json)
+      json_output="true"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Opção desconhecida: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! $limit =~ ^[0-9]+$ ]] || [[ $limit -lt 1 ]]; then
+  echo "Erro: --limit tem de ser um inteiro positivo." >&2
+  exit 1
+fi
+
+api_base="https://api.todoist.com/api/v1"
+headers=(
+  -H "Authorization: Bearer ${TODOIST_API_TOKEN}"
+  -H "Content-Type: application/json"
+)
+
+if [[ -n $filter ]]; then
+  response=$(curl -fsS -G "${api_base}/tasks/filter" \
+    "${headers[@]}" \
+    --data-urlencode "query=${filter}" \
+    --data-urlencode "limit=${limit}")
+else
+  response=$(curl -fsS -G "${api_base}/tasks" \
+    "${headers[@]}" \
+    --data-urlencode "limit=${limit}")
+fi
+
+if [[ $json_output == "true" ]]; then
+  printf '%s\n' "$response"
+  exit 0
+fi
+
+RESPONSE="$response" LIMIT="$limit" python3 <<'PY'
+import json
+import os
+import sys
+
+resp = json.loads(os.environ["RESPONSE"])
+limit = int(os.environ["LIMIT"])
+
+tasks = resp if isinstance(resp, list) else resp.get("results", [])
+if not tasks:
+    print("Sem tarefas.")
+    sys.exit(0)
+
+def priority_label(value):
+    mapping = {4: "P1", 3: "P2", 2: "P3", 1: "P4"}
+    return mapping.get(value, f"P{value}")
+
+print(f"{len(tasks[:limit])} tarefa(s):")
+for task in tasks[:limit]:
+    due = task.get("due") or {}
+    due_text = due.get("string") or due.get("date") or "sem data"
+    priority = priority_label(task.get("priority", ""))
+    content = task.get("content", "")
+    task_id = task.get("id", "")
+    project = task.get("project_id")
+    labels = task.get("labels") or []
+    extras = [priority, due_text]
+    if project:
+      extras.append(f"proj:{project}")
+    if labels:
+      extras.append("labels:" + ",".join(labels))
+    print(f"- {content}")
+    print(f"  [{task_id}] {' | '.join(str(x) for x in extras if x)}")
+PY

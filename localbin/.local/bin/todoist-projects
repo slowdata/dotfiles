@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  cat <<'EOF'
+Usage:
+  todoist-projects
+
+Lista projetos da Todoist (id + nome).
+
+Required env:
+  TODOIST_API_TOKEN
+EOF
+  exit 0
+fi
+
+if [[ -z ${TODOIST_API_TOKEN:-} ]]; then
+  echo "Erro: variável TODOIST_API_TOKEN não definida." >&2
+  echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.zshrc.local" >&2
+  exit 1
+fi
+
+response=$(curl -fsS "https://api.todoist.com/api/v1/projects" \
+  -H "Authorization: Bearer ${TODOIST_API_TOKEN}" \
+  -H "Content-Type: application/json")
+
+RESPONSE="$response" python3 <<'PY'
+import json, os
+resp = json.loads(os.environ['RESPONSE'])
+projects = resp if isinstance(resp, list) else resp.get('results', [])
+if not projects:
+    print('Sem projetos.')
+    raise SystemExit(0)
+for p in projects:
+    print(f"- {p.get('name','')} [{p.get('id','')}]")
+PY
