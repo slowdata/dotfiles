@@ -72,6 +72,9 @@ Exemplo: `ghostty/.config/ghostty/config` → `~/.config/ghostty/config`
 
 ## Instalar / Actualizar numa máquina
 
+> Guia operativo detalhado: ver `docs/GUIA_SINCRONIZACAO.md`
+
+
 ### Primeira vez
 
 ```bash
@@ -145,14 +148,11 @@ dotfiles-stow-hypr
 
 ## Estado actual por máquina
 
-| Máquina       | Stow aplicado | Actualizado |
-|---------------|:-------------:|:-----------:|
-| `ossoarchy`   | ✅ Sim        | ✅ Sim      |
-| `viarchy`     | ?             | ?           |
-| `omarchy-pgr` | ?             | ?           |
-
-> **ossoarchy** tem os ficheiros como cópias directas (não symlinks). Precisa de
-> apagar os ficheiros actuais e correr `stow` para ficar em sincronia com o repo.
+| Máquina       | Hypr via Stow | Scripts `localbin` | Observações |
+|---------------|:-------------:|:------------------:|-------------|
+| `ossoarchy`   | ✅ Sim        | ✅ Sim             | usa `hypr-ossoarchy` |
+| `viarchy`     | ✅ Sim        | ✅ Sim             | usa `hypr-viarchy` |
+| `omarchy-pgr` | ✅ Sim        | ✅ Sim             | usa `hypr-omarchy-pgr` |
 
 ---
 
