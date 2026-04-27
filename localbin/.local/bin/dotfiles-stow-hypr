@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+host="${1:-$(hostname)}"
+repo="$HOME/dotfiles"
+common_pkg="hypr-common"
+host_pkg="hypr-$host"
+
+cd "$repo"
+
+if [ ! -d "$common_pkg" ]; then
+  echo "Missing package: $common_pkg" >&2
+  exit 1
+fi
+
+if [ ! -d "$host_pkg" ]; then
+  echo "Missing host package: $host_pkg" >&2
+  exit 1
+fi
+
+stow "$common_pkg" "$host_pkg"
+
+echo "Applied: $common_pkg $host_pkg"

@@ -1,0 +1,105 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+    echo "Uso: transcrever-reuniao /caminho/para/audio.wav [ficheiro_saida.md]" >&2
+    echo "Variaveis: WHISPER_MODEL=large-v3-turbo WHISPER_LANGUAGE=pt CHUNK_SECONDS=180" >&2
+    exit 1
+fi
+
+AUDIO_FILE="$1"
+if [[ ! -f "$AUDIO_FILE" ]]; then
+    echo "Audio nao encontrado: $AUDIO_FILE" >&2
+    exit 1
+fi
+
+OUTPUT_DIR="$HOME/Reunioes"
+mkdir -p "$OUTPUT_DIR"
+
+BASENAME=$(basename "$AUDIO_FILE")
+STEM="${BASENAME%.*}"
+DEFAULT_OUTPUT="${OUTPUT_DIR}/${STEM}.md"
+OUTPUT_FILE="${2:-$DEFAULT_OUTPUT}"
+
+WHISPER_MODEL="${WHISPER_MODEL:-large-v3-turbo}"
+WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-pt}"
+CHUNK_SECONDS="${CHUNK_SECONDS:-180}"
+CHUNK_DIR=$(mktemp -d /tmp/transcrever_reuniao_chunks_XXXXXX)
+PYTHON_BIN="/home/dias/.local/share/pipx/venvs/faster-whisper/bin/python"
+
+cleanup() {
+    rm -rf "$CHUNK_DIR"
+}
+trap cleanup EXIT
+
+echo "A dividir audio em blocos de ${CHUNK_SECONDS}s..."
+ffmpeg -hide_banner -loglevel error -i "$AUDIO_FILE" \
+    -f segment -segment_time "$CHUNK_SECONDS" -c copy \
+    "$CHUNK_DIR/chunk_%03d.wav"
+
+echo "A transcrever..."
+echo "  Modelo pedido : ${WHISPER_MODEL}"
+echo "  Lingua        : ${WHISPER_LANGUAGE}"
+echo "  Blocos        : ${CHUNK_SECONDS}s"
+"$PYTHON_BIN" - <<EOF
+import glob
+import os
+import sys
+from faster_whisper import WhisperModel
+
+audio_file = ${AUDIO_FILE@Q}
+outfile = ${OUTPUT_FILE@Q}
+chunk_seconds = int(${CHUNK_SECONDS@Q})
+requested_model = os.environ.get("WHISPER_MODEL", ${WHISPER_MODEL@Q})
+language = os.environ.get("WHISPER_LANGUAGE", ${WHISPER_LANGUAGE@Q})
+chunk_files = sorted(glob.glob(${CHUNK_DIR@Q} + "/chunk_*.wav"))
+
+candidates = []
+for candidate in (requested_model, "large-v3", "medium"):
+    if candidate and candidate not in candidates:
+        candidates.append(candidate)
+
+last_error = None
+active_model = None
+model = None
+
+for candidate in candidates:
+    try:
+        model = WhisperModel(candidate, device="cpu", compute_type="int8")
+        active_model = candidate
+        break
+    except Exception as exc:
+        last_error = exc
+        print(f"Aviso: falha ao carregar modelo '{candidate}': {exc}", flush=True)
+
+if model is None:
+    raise SystemExit(f"Erro: nao foi possivel carregar nenhum modelo ({', '.join(candidates)}): {last_error}")
+
+print(f"Modelo em uso: {active_model}", flush=True)
+
+def fmt_time(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+with open(outfile, "w", encoding="utf-8") as f:
+    f.write(f"# Reunião {os.path.basename(audio_file)}\\n\\n")
+    f.write(f"_Modelo: {active_model}, língua: {language}, blocos de {chunk_seconds} segundos_\\n\\n")
+    for index, chunk_file in enumerate(chunk_files):
+        offset = index * chunk_seconds
+        print(f"Bloco {index + 1}/{len(chunk_files)}: {os.path.basename(chunk_file)}", flush=True)
+        segments, _ = model.transcribe(
+            chunk_file,
+            beam_size=3,
+            language=language,
+            vad_filter=True,
+            condition_on_previous_text=False,
+        )
+        for segment in segments:
+            text = segment.text.strip()
+            if text:
+                f.write(f"[{fmt_time(segment.start + offset)}] {text}\\n")
+
+print(f"OK: {outfile}")
+EOF

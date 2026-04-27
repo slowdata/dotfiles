@@ -37,6 +37,14 @@ git@github.com:slowdata/dotfiles.git
 dotfiles/
 ├── ghostty/
 │   └── .config/ghostty/config      # Config do terminal principal
+├── hypr-common/
+│   └── .config/hypr/               # Hyprland comum a todas as máquinas
+├── hypr-ossoarchy/
+│   └── .config/hypr/               # Hyprland específico do ossoarchy (input/monitors)
+├── hypr-viarchy/
+│   └── README.md                   # Placeholder para input/monitors do viarchy
+├── hypr-omarchy-pgr/
+│   └── README.md                   # Placeholder para input/monitors do omarchy-pgr
 ├── ohmyposh/
 │   └── .config/ohmyposh/           # Tema zen do oh-my-posh
 ├── pi/
@@ -74,6 +82,9 @@ cd ~/dotfiles
 # 2. Aplicar com stow (cria symlinks em ~)
 stow ghostty ohmyposh tmux zsh pi localbin
 
+# 2b. Hyprland / Omarchy
+stow hypr-common hypr-$(hostname)
+
 # 3. (Opcional) wezterm — só em Windows/WSL
 stow wezterm
 
@@ -93,7 +104,9 @@ touch ~/.zshrc.local
 ```bash
 cd ~/dotfiles
 git pull
-# Os symlinks já apontam para os ficheiros actualizados — não é necessário re-fazer stow.
+# Normalmente os symlinks já apontam para os ficheiros actualizados.
+# Se adicionaste um novo pacote Hypr para a máquina atual, re-aplica:
+dotfiles-stow-hypr
 ```
 
 ### Adicionar/alterar config
@@ -101,8 +114,34 @@ git pull
 1. Editar o ficheiro **dentro de `~/dotfiles/`** (não em `~` directamente)
 2. `git add`, `git commit`, `git push`
 3. Nas outras máquinas: `git pull`
+4. Se a alteração for de Hyprland e envolver novo pacote específico por máquina: `dotfiles-stow-hypr`
 
 ---
+
+## Hyprland / Omarchy
+
+A configuração Hyprland foi dividida em duas camadas:
+
+- `hypr-common/` → atalhos, look & feel, lock, idle, autostart, etc.
+- `hypr-<hostname>/` → apenas o que depende da máquina
+  - `input.conf`
+  - `monitors.conf`
+
+Isto evita partir setups com teclados físicos diferentes.
+
+### Regra prática
+
+- sincronizar globalmente: `bindings.conf`, `looknfeel.conf`, `hyprlock.conf`, `hypridle.conf`, etc.
+- manter por máquina: `input.conf`, `monitors.conf`
+
+### Aplicar numa máquina
+
+```bash
+cd ~/dotfiles
+stow hypr-common hypr-$(hostname)
+# ou
+dotfiles-stow-hypr
+```
 
 ## Estado actual por máquina
 

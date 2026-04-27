@@ -1,0 +1,43 @@
+#!/bin/bash
+
+set -euo pipefail
+
+TIMESTAMP=$(date +%Y-%m-%d_%H%M)
+AUDIO_FILE="/tmp/reuniao_${TIMESTAMP}.wav"
+
+echo "🎙  A gravar reunião — Ctrl+C para parar"
+echo "     Ficheiro: $AUDIO_FILE"
+echo ""
+
+# Captura áudio do sistema (PipeWire via PulseAudio compat)
+MONITOR="$(pactl get-default-sink).monitor"
+MIC="$(pactl get-default-source)"
+
+echo "     Monitor : $MONITOR"
+echo "     Microfone: $MIC"
+echo ""
+echo "  Antes de gravar, confirma:"
+echo "  ✅ Estás a ouvir a reunião pelo dispositivo correto?"
+echo "  ✅ O microfone está ligado?"
+echo ""
+read -rp "  Prima Enter para começar a gravar (Ctrl+C para cancelar)..."
+echo ""
+
+ffmpeg_pid=""
+trap '[[ -n "${ffmpeg_pid:-}" ]] && kill "$ffmpeg_pid" 2>/dev/null || true' INT
+
+# Mistura monitor (outros participantes) + microfone (a tua voz)
+# Nota: monitor pode ser stereo e mic é mono — converter tudo a mono antes de misturar
+ffmpeg -f pulse -i "$MONITOR" -f pulse -i "$MIC" \
+    -filter_complex "[0:a]aformat=channel_layouts=mono[mon];[1:a]volume=1.5[mic];[mon][mic]amix=inputs=2:duration=longest[out]" \
+    -map "[out]" -ar 16000 "$AUDIO_FILE" 2>/dev/null &
+ffmpeg_pid=$!
+wait "$ffmpeg_pid"
+
+echo ""
+echo "✅ Gravação terminada"
+echo "   WAV: $AUDIO_FILE"
+echo ""
+echo "Para transcrever depois:"
+printf 'PT: WHISPER_MODEL=large-v3-turbo WHISPER_LANGUAGE=pt transcrever-reuniao "%s"\n' "$AUDIO_FILE"
+printf 'EN: WHISPER_MODEL=large-v3-turbo WHISPER_LANGUAGE=en transcrever-reuniao "%s"\n' "$AUDIO_FILE"
