@@ -24,7 +24,16 @@ read -rp "  Prima Enter para começar a gravar (Ctrl+C para cancelar)..."
 echo ""
 
 ffmpeg_pid=""
-trap '[[ -n "${ffmpeg_pid:-}" ]] && kill "$ffmpeg_pid" 2>/dev/null || true' INT
+recording_stopped=false
+
+stop_recording() {
+  recording_stopped=true
+  echo ""
+  echo "⏹  A parar gravação..."
+  [[ -n "${ffmpeg_pid:-}" ]] && kill "$ffmpeg_pid" 2>/dev/null || true
+}
+
+trap stop_recording INT
 
 # Mistura monitor (outros participantes) + microfone (a tua voz)
 # Nota: monitor pode ser stereo e mic é mono — converter tudo a mono antes de misturar
@@ -32,7 +41,16 @@ ffmpeg -f pulse -i "$MONITOR" -f pulse -i "$MIC" \
     -filter_complex "[0:a]aformat=channel_layouts=mono[mon];[1:a]volume=1.5[mic];[mon][mic]amix=inputs=2:duration=longest[out]" \
     -map "[out]" -ar 16000 "$AUDIO_FILE" 2>/dev/null &
 ffmpeg_pid=$!
+
+set +e
 wait "$ffmpeg_pid"
+ffmpeg_status=$?
+set -e
+
+if [[ $ffmpeg_status -ne 0 && $recording_stopped != true ]]; then
+  echo "Erro: a gravação terminou de forma inesperada." >&2
+  exit "$ffmpeg_status"
+fi
 
 echo ""
 echo "✅ Gravação terminada"
