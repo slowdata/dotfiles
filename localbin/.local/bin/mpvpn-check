@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+JAVA8_HOME="${MPVPN_JAVA8_HOME:-/usr/lib/jvm/java-8-openjdk/jre}"
+ENDPOINT="${MPVPN_LOCAL_ENDPOINT:-https://localhost:14186/id}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mpvpn-check
+
+Verifica o estado da stack da VPN Check Point:
+  - Java global e Java 8
+  - presença de cshell/snx/xfreerdp
+  - /dev/net/tun
+  - SUID do snx
+  - endpoint local do CShell
+  - interface tunsnx
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+check_cmd() {
+  local name="$1"
+  if command -v "$name" >/dev/null 2>&1; then
+    printf 'OK   %-12s %s\n' "$name" "$(command -v "$name")"
+  else
+    printf 'FAIL %-12s não encontrado\n' "$name"
+  fi
+}
+
+echo '==> Binários'
+check_cmd java
+check_cmd snx
+if command -v xfreerdp >/dev/null 2>&1; then
+  printf 'OK   %-12s %s\n' 'xfreerdp' "$(command -v xfreerdp)"
+elif command -v xfreerdp3 >/dev/null 2>&1; then
+  printf 'OK   %-12s %s\n' 'xfreerdp3' "$(command -v xfreerdp3)"
+else
+  printf 'FAIL %-12s não encontrado\n' 'xfreerdp'
+fi
+if [[ -x /usr/bin/cshell/launcher ]]; then
+  printf 'OK   %-12s %s\n' 'cshell' '/usr/bin/cshell/launcher'
+else
+  printf 'FAIL %-12s não encontrado\n' 'cshell'
+fi
+
+echo
+printf '==> Java global\n'
+java -version 2>&1 | head -n 2 || true
+
+echo
+printf '==> Java 8 forçado\n'
+if [[ -x "$JAVA8_HOME/bin/java" ]]; then
+  JAVA_HOME="$JAVA8_HOME" PATH="$JAVA8_HOME/bin:$PATH" java -version 2>&1 | head -n 2
+else
+  echo "FAIL Java 8 não encontrado em $JAVA8_HOME/bin/java"
+fi
+
+echo
+printf '==> snx / tun\n'
+stat -c 'snx: %U %G %A %n' /usr/bin/snx 2>/dev/null || echo 'FAIL /usr/bin/snx não existe'
+ls -l /dev/net/tun 2>/dev/null || echo 'FAIL /dev/net/tun não existe'
+
+echo
+printf '==> Endpoint local do CShell\n'
+if curl -sk --max-time 3 "$ENDPOINT"; then
+  echo
+else
+  echo 'FAIL endpoint local indisponível'
+fi
+
+echo
+printf '==> Interface VPN\n'
+if ip link show tunsnx >/dev/null 2>&1; then
+  ip -brief link show tunsnx
+else
+  echo 'FAIL tunsnx não existe (VPN pode não estar ligada)'
+fi

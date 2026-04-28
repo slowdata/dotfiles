@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CERT_FILE="${MPVPN_CERT_FILE:-/usr/bin/cshell/cert/CShell_Certificate.crt}"
+JAVA8_HOME="${MPVPN_JAVA8_HOME:-/usr/lib/jvm/java-8-openjdk/jre}"
+JAVA8_CACERTS="$JAVA8_HOME/lib/security/cacerts"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mpvpn-cert-install
+
+Instala o certificado local do CShell na trust store do sistema.
+
+Isto ajuda quando:
+  - curl sem -k falha para https://localhost:14186/id
+  - o portal dá code 50 / code 300 apesar do CShell arrancar bem
+
+Notas:
+  - requer sudo
+  - é uma operação local nesta máquina
+  - depois de instalar, fecha e reabre o Chromium usado para a VPN
+
+Comandos úteis:
+  mpvpn-cert-install   instala/atualiza o certificado
+  mpvpn-check          valida endpoint local
+  mpvpn-web            abre portal em Chromium isolado
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ ! -f "$CERT_FILE" ]]; then
+  echo "Erro: certificado não encontrado em: $CERT_FILE" >&2
+  exit 1
+fi
+
+echo "==> A instalar certificado do CShell na trust store do sistema"
+# trust anchor pode falhar no NSS (read-only no Arch) — usar cópia direta como método principal
+ANCHOR_DIR="/etc/ca-certificates/trust-source/anchors"
+if [[ -d "$ANCHOR_DIR" ]]; then
+  sudo cp "$CERT_FILE" "$ANCHOR_DIR/CShell_Certificate.crt"
+  sudo update-ca-trust
+else
+  # fallback para distros sem ca-certificates Arch-style
+  sudo trust anchor --store "$CERT_FILE" 2>&1 | grep -v "couldn't create object" || true
+  sudo trust extract-compat
+fi
+
+echo
+echo "==> A importar DigiCert Assured ID Root CA no Java 8 keystore"
+echo "    (necessário para verificação do ics4LINUX.jar no portal Check Point)"
+if keytool -list -keystore "$JAVA8_CACERTS" -storepass changeit \
+    -alias digicertassuredidrootca >/dev/null 2>&1; then
+  echo "OK: já existe no keystore Java 8."
+else
+  # DigiCert Assured ID Root CA (v1) — emitida 2006, expira 2031
+  # Fonte: cadeia de assinatura do ics4LINUX.jar do portal Check Point
+  DIGICERT_PEM=$(mktemp /tmp/digicert_root_XXXXXX.pem)
+  cat > "$DIGICERT_PEM" << 'CERTEOF'
+-----BEGIN CERTIFICATE-----
+MIIDtzCCAp+gAwIBAgIQDOfg5RfYRv6P5WD8G/AwOTANBgkqhkiG9w0BAQUFADBl
+MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+d3cuZGlnaWNlcnQuY29tMSQwIgYDVQQDExtEaWdpQ2VydCBBc3N1cmVkIElEIFJv
+b3QgQ0EwHhcNMDYxMTEwMDAwMDAwWhcNMzExMTEwMDAwMDAwWjBlMQswCQYDVQQG
+EwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3d3cuZGlnaWNl
+cnQuY29tMSQwIgYDVQQDExtEaWdpQ2VydCBBc3N1cmVkIElEIFJvb3QgQ0EwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCtDhXO5EOAXLGH87dg+XESpa7c
+JpSIqvTO9SA5KFhgDPiA2qkVlTJhPLWxKISKityfCgyDF3qPkKyK53lTXDGEKvYP
+mDI2dsze3Tyoou9q+yHyUmHfnyDXH+Kx2f4YZNISW1/5WBg1vEfNoTb5a3/UsDg+
+wRvDjDPZ2C8Y/igPs6eD1sNuRMBhNZYW/lmci3Zt1/GiSw0r/wty2p5g0I6QNcZ4
+VYcgoc/lbQrISXwxmDNsIumH0DJaoroTghHtORedmTpyoeb6pNnVFzF1roV9Iq4/
+AUaG9ih5yLHa5FcXxH4cDrC0kqZWs72yl+2qp/C3xag/lRbQ/6GW6whfGHdPAgMB
+AAGjYzBhMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW
+BBRF66Kv9JLLgjEtUYunpyGd823IDzAfBgNVHSMEGDAWgBRF66Kv9JLLgjEtUYun
+pyGd823IDzANBgkqhkiG9w0BAQUFAAOCAQEAog683+Lt8ONyc3pklL/3cmbYMuRC
+dWKuh+vy1dneVrOfzM4UKLkNl2BcEkxY5NM9g0lFWJc1aRqoR+pWxnmrEthngYTf
+fwk8lOa4JiwgvT2zKIn3X/8i4peEH+ll74fg38FnSbNd67IJKusm7Xi+fT8r87cm
+NW1fiQG2SVufAQWbqz0lwcy2f8Lxb4bG+mRo64EtlOtCt/qMHt1i8b5QZ7dsvfPx
+H2sMNgcWfzd8qVttevESRmCD1ycEvkvOl77DZypoEd+A5wwzZr8TDRRu838fYxAe
++o0bJW1sj6W3YQGx0qMmoRBxna3iw/nDmVG3KwcIzi7mULKn+gpFL6Lw8g==
+-----END CERTIFICATE-----
+CERTEOF
+  sudo keytool -import -noprompt \
+    -keystore "$JAVA8_CACERTS" -storepass changeit \
+    -alias digicertassuredidrootca \
+    -file "$DIGICERT_PEM"
+  rm -f "$DIGICERT_PEM"
+  echo "OK: DigiCert Assured ID Root CA importado."
+fi
+
+echo
+echo "Certificados instalados. Reinicia o browser da VPN e testa:"
+echo "  curl -sS https://localhost:14186/id"
+echo "  mpvpn-web"

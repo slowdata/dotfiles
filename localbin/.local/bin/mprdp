@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_USER='PROCURADORIA\ricardo.j.dias'
+RDP_HOST="${1:-${MPRDP_HOST:-}}"
+RDP_USER="${MPRDP_USER:-$DEFAULT_USER}"
+RDP_BIN="$(command -v xfreerdp 2>/dev/null || command -v xfreerdp3 2>/dev/null || true)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mprdp [host-ou-ip] [opções-extra-do-xfreerdp]
+
+Abre RDP para o PC do trabalho.
+
+Se não passares host/IP, usa:
+  MPRDP_HOST  (em ~/.zshrc.local)
+
+Utilizador por omissão:
+  PROCURADORIA\ricardo.j.dias
+
+Config opcional (~/.zshrc.local):
+  export MPRDP_HOST="10.x.x.x"
+  export MPRDP_USER="PROCURADORIA\\ricardo.j.dias"
+
+Exemplos:
+  mprdp 10.10.10.10
+  mprdp pc-trabalho.interno /size:1920x1080
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ -z "$RDP_BIN" ]]; then
+  echo 'Erro: xfreerdp/xfreerdp3 não encontrado.' >&2
+  echo 'Sugestão: omarchy-pkg-add freerdp remmina' >&2
+  exit 1
+fi
+
+if [[ -z "$RDP_HOST" ]]; then
+  echo 'Erro: falta host/IP do PC do trabalho.' >&2
+  echo 'Passa como argumento ou define MPRDP_HOST em ~/.zshrc.local' >&2
+  exit 1
+fi
+
+if [[ $# -gt 0 ]]; then
+  shift || true
+fi
+
+exec "$RDP_BIN" \
+  /v:"$RDP_HOST" \
+  /u:"$RDP_USER" \
+  /dynamic-resolution \
+  /network:lan \
+  +gfx-h264 +gfx-progressive +glyph-cache \
+  /cert:ignore \
+  "$@"

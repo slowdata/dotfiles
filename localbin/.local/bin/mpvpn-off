@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mpvpn-off
+
+Desliga a VPN Check Point e limpa processos auxiliares.
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+echo '==> A desligar snx'
+sudo snx -d 2>/dev/null || true
+
+echo '==> A terminar cshell/cpae'
+sudo pkill -f 'cshell|cpae|snx' 2>/dev/null || true
+sudo rm -f /tmp/cshell.fifo
+
+echo 'VPN desligada / limpeza concluída.'

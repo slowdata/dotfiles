@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PORTAL_URL="${MPVPN_PORTAL_URL:-https://iustitia.ministeriopublico.pt/sslvpn/Portal/Main}"
+BROWSER="${MPVPN_BROWSER:-chromium}"
+CHROMIUM_PROFILE_DIR="${MPVPN_CHROMIUM_PROFILE_DIR:-$HOME/.config/chromium-mpvpn}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mpvpn-web
+
+Abre o portal Check Point Mobile Access com flags compatíveis.
+
+Por omissão usa Chromium com perfil isolado em:
+  ~/.config/chromium-mpvpn
+
+Config opcional (~/.zshrc.local):
+  export MPVPN_PORTAL_URL="https://..."
+  export MPVPN_BROWSER="chromium"   # recomendado
+  export MPVPN_CHROMIUM_PROFILE_DIR="$HOME/.config/chromium-mpvpn"
+
+Notas:
+  - O perfil isolado evita conflitos com extensões/cookies/cache do browser normal.
+  - Se necessário, instalar o certificado local com: mpvpn-cert-install
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$BROWSER" == "chromium" || "$BROWSER" == "auto" ]]; then
+  if command -v chromium >/dev/null 2>&1; then
+    mkdir -p "$CHROMIUM_PROFILE_DIR"
+    exec chromium \
+      --user-data-dir="$CHROMIUM_PROFILE_DIR" \
+      --ozone-platform=x11 \
+      --allow-insecure-localhost \
+      --ignore-certificate-errors \
+      --disable-features=BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights \
+      "$PORTAL_URL"
+  fi
+fi
+
+echo "Erro: browser suportado não disponível. Neste setup usa-se Chromium." >&2
+exit 1

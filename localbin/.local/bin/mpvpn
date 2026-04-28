@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+JAVA8_HOME="${MPVPN_JAVA8_HOME:-/usr/lib/jvm/java-8-openjdk/jre}"
+CSHELL_DIR="${MPVPN_CSHELL_DIR:-/usr/bin/cshell}"
+CSHELL_JAR="${MPVPN_CSHELL_JAR:-$CSHELL_DIR/CShell.jar}"
+FIFO="/tmp/cshell.fifo"
+LOG_FILE="${MPVPN_LOG_FILE:-/tmp/cshell.log}"
+ENDPOINT="${MPVPN_LOCAL_ENDPOINT:-https://localhost:14186/id}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  mpvpn
+
+Arranca o CShell da Check Point forçando Java 8, sem mudar o Java global do sistema.
+
+O que faz:
+  - mata processos antigos (cshell/cpae/snx)
+  - limpa /tmp/cshell.fifo
+  - força JAVA_HOME/PATH para Java 8
+  - arranca diretamente o CShell.jar (workaround para launcher partido)
+  - espera pelo endpoint local https://localhost:14186/id
+
+Comandos relacionados:
+  mpvpn-check   verificar Java 8 / endpoint local / tunsnx
+  mpvpn-web     abrir portal Check Point
+  mpvpn-off     desligar VPN e limpar processos
+  mprdp         abrir RDP para o PC do trabalho
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ ! -f "$CSHELL_JAR" ]]; then
+  echo "Erro: CShell.jar não encontrado em: $CSHELL_JAR" >&2
+  echo "Instalação esperada: omarchy-pkg-aur-add cshell snx" >&2
+  exit 1
+fi
+
+if [[ ! -x "$JAVA8_HOME/bin/java" ]]; then
+  echo "Erro: Java 8 não encontrado em: $JAVA8_HOME/bin/java" >&2
+  echo "Sugestão: omarchy-pkg-add jre8-openjdk" >&2
+  echo "Se estiver noutro caminho, define MPVPN_JAVA8_HOME em ~/.zshrc.local" >&2
+  exit 1
+fi
+
+echo "==> A limpar processos antigos da VPN"
+sudo pkill -f 'cshell|cpae|snx' 2>/dev/null || true
+sudo rm -f "$FIFO"
+
+echo "==> Java usado pelo launcher:"
+JAVA_HOME="$JAVA8_HOME" PATH="$JAVA8_HOME/bin:$PATH" java -version 2>&1 | head -n 2
+
+echo
+if [[ ! -e /dev/net/tun ]]; then
+  echo "Aviso: /dev/net/tun não existe. Vou tentar carregar o módulo tun..."
+  sudo modprobe tun
+fi
+
+# Override security policy: ics4LINUX.jar usa cadeia DigiCert com SHA-1 (bloqueada por omissão em Java 8u292+)
+JAVA_SEC_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mpvpn"
+JAVA_SEC_FILE="$JAVA_SEC_DIR/java.security"
+mkdir -p "$JAVA_SEC_DIR"
+cat > "$JAVA_SEC_FILE" << 'SECEOF'
+jdk.certpath.disabledAlgorithms=MD2, MD5, SHA1 jdkCA & usage TLSServer, RSA keySize < 1024, DSA keySize < 1024, EC keySize < 224
+jdk.jar.disabledAlgorithms=MD2, MD5, RSA keySize < 1024, DSA keySize < 1024
+SECEOF
+
+# Limpar cache do CShell para forçar download fresco (stale truncated JARs causam falha de verificação)
+echo "==> A limpar cache do CShell (/tmp/CSHELL)"
+sudo rm -rf /tmp/CSHELL
+
+echo "==> A arrancar CShell com Java 8 (direto ao JAR)"
+rm -f "$LOG_FILE"
+mkfifo "$FIFO"
+(
+  cd "$CSHELL_DIR"
+  nohup env JAVA_HOME="$JAVA8_HOME" PATH="$JAVA8_HOME/bin:$PATH" \
+    "$JAVA8_HOME/bin/java" \
+    "-Djava.security.properties=$JAVA_SEC_FILE" \
+    -jar ./CShell.jar "$FIFO" >"$LOG_FILE" 2>&1 &
+)
+
+for _ in {1..20}; do
+  if curl -sk --max-time 1 "$ENDPOINT" >/dev/null 2>&1; then
+    echo "OK: endpoint local disponível em $ENDPOINT"
+    echo "Log: $LOG_FILE"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "Erro: endpoint local não ficou disponível." >&2
+if [[ -f "$LOG_FILE" ]]; then
+  echo "--- últimas linhas de $LOG_FILE ---" >&2
+  tail -n 40 "$LOG_FILE" >&2 || true
+fi
+exit 1
