@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DRY_RUN=false
+VERBOSE=false
+
+usage() {
+  cat <<'EOF'
+Uso: backup-notes-to-dropbox [--dry-run] [--verbose]
+
+Faz backup unidirecional:
+  ~/Sync/Obsidian -> ~/Dropbox/Backups/Notas/Obsidian
+  ~/Sync/Logseq   -> ~/Dropbox/Backups/Notas/Logseq
+  ~/Sync/Reunioes -> ~/Dropbox/Backups/Notas/Reunioes
+
+Notas:
+  - Sync é a fonte da verdade.
+  - Dropbox é apenas destino/backup.
+  - Usa rsync com --delete para manter o destino espelhado.
+  - Usa --checksum para evitar copiar ficheiros cujo conteúdo é igual mas mtime difere.
+  - Exclui .stfolder/ para não copiar marcador interno do Syncthing.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run|-n)
+      DRY_RUN=true
+      shift
+      ;;
+    --verbose|-v)
+      VERBOSE=true
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Argumento desconhecido: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+STATE_DIR="$HOME/.local/state/notes-backup"
+LOG_DIR="$STATE_DIR/logs"
+LOCK_FILE="$STATE_DIR/backup.lock"
+mkdir -p "$LOG_DIR"
+
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="$LOG_DIR/backup_${TIMESTAMP}.log"
+LATEST_LOG="$LOG_DIR/latest.log"
+
+RSYNC_OPTS=(
+  -a
+  --delete
+  --human-readable
+  --itemize-changes
+  --stats
+  --checksum
+  --exclude='.stfolder/'
+)
+
+if [[ "$DRY_RUN" == true ]]; then
+  RSYNC_OPTS+=(--dry-run)
+fi
+
+if [[ "$VERBOSE" == true ]]; then
+  RSYNC_OPTS+=(-v)
+fi
+
+PAIRS=(
+  "$HOME/Sync/Obsidian|$HOME/Dropbox/Backups/Notas/Obsidian"
+  "$HOME/Sync/Logseq|$HOME/Dropbox/Backups/Notas/Logseq"
+  "$HOME/Sync/Reunioes|$HOME/Dropbox/Backups/Notas/Reunioes"
+)
+
+run_backup() {
+  {
+    echo "# Backup notas -> Dropbox"
+    echo "Data: $(date --iso-8601=seconds)"
+    echo "Host: $(hostname)"
+    echo "Modo: $([[ "$DRY_RUN" == true ]] && echo dry-run || echo real)"
+    echo ""
+
+    for pair in "${PAIRS[@]}"; do
+      src="${pair%%|*}"
+      dst="${pair#*|}"
+
+      echo "## $src -> $dst"
+
+      if [[ ! -d "$src" ]]; then
+        echo "ERRO: origem não existe: $src" >&2
+        echo ""
+        continue
+      fi
+
+      mkdir -p "$dst"
+
+      rsync "${RSYNC_OPTS[@]}" "$src/" "$dst/"
+      echo ""
+    done
+
+    echo "Fim: $(date --iso-8601=seconds)"
+  } 2>&1 | tee "$LOG_FILE"
+
+  ln -sfn "$LOG_FILE" "$LATEST_LOG"
+}
+
+(
+  flock -n 9 || {
+    echo "Já existe backup em execução: $LOCK_FILE" >&2
+    exit 1
+  }
+  run_backup
+) 9>"$LOCK_FILE"
+
+echo "Log: $LOG_FILE"

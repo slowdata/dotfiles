@@ -4,7 +4,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "Uso: transcrever-reuniao /caminho/para/audio.wav [ficheiro_saida.md]" >&2
-    echo "Variaveis: WHISPER_MODEL=large-v3-turbo WHISPER_LANGUAGE=pt CHUNK_SECONDS=180" >&2
+    echo "Variaveis: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt CHUNK_SECONDS=180 TRIM_SILENCE=1 ARCHIVE_OPUS=0" >&2
     exit 1
 fi
 
@@ -14,18 +14,21 @@ if [[ ! -f "$AUDIO_FILE" ]]; then
     exit 1
 fi
 
-OUTPUT_DIR="$HOME/Reunioes"
-mkdir -p "$OUTPUT_DIR"
-
 BASENAME=$(basename "$AUDIO_FILE")
-STEM="${BASENAME%.*}"
-DEFAULT_OUTPUT="${OUTPUT_DIR}/${STEM}.md"
+DEFAULT_OUTPUT="${AUDIO_FILE%.*}.md"
 OUTPUT_FILE="${2:-$DEFAULT_OUTPUT}"
 
-WHISPER_MODEL="${WHISPER_MODEL:-large-v3-turbo}"
+WHISPER_MODEL="${WHISPER_MODEL:-large-v3}"
 WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-pt}"
 CHUNK_SECONDS="${CHUNK_SECONDS:-180}"
+TRIM_SILENCE="${TRIM_SILENCE:-1}"
+TRIM_THRESHOLD="${TRIM_THRESHOLD:--45dB}"
+TRIM_DURATION="${TRIM_DURATION:-0.5}"
+ARCHIVE_OPUS="${ARCHIVE_OPUS:-0}"
+OPUS_BITRATE="${OPUS_BITRATE:-48k}"
 CHUNK_DIR=$(mktemp -d /tmp/transcrever_reuniao_chunks_XXXXXX)
+TRIMMED_AUDIO="$CHUNK_DIR/trimmed_input.wav"
+AUDIO_FOR_TRANSCRIBE="$AUDIO_FILE"
 PYTHON_BIN="/home/dias/.local/share/pipx/venvs/faster-whisper/bin/python"
 
 cleanup() {
@@ -33,19 +36,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ "$TRIM_SILENCE" == "1" ]]; then
+    echo "A cortar silêncio no início/fim..."
+    ffmpeg -hide_banner -loglevel error -y -i "$AUDIO_FILE" \
+        -af "silenceremove=start_periods=1:start_duration=${TRIM_DURATION}:start_threshold=${TRIM_THRESHOLD},areverse,silenceremove=start_periods=1:start_duration=${TRIM_DURATION}:start_threshold=${TRIM_THRESHOLD},areverse" \
+        -ar 16000 -ac 1 -c:a pcm_s16le "$TRIMMED_AUDIO"
+    if [[ -s "$TRIMMED_AUDIO" ]]; then
+        AUDIO_FOR_TRANSCRIBE="$TRIMMED_AUDIO"
+    else
+        echo "Aviso: trim gerou ficheiro vazio; sigo com o áudio original." >&2
+    fi
+fi
+
 echo "A dividir audio em blocos de ${CHUNK_SECONDS}s..."
-ffmpeg -hide_banner -loglevel error -i "$AUDIO_FILE" \
-    -f segment -segment_time "$CHUNK_SECONDS" -c copy \
+ffmpeg -hide_banner -loglevel error -i "$AUDIO_FOR_TRANSCRIBE" \
+    -f segment -segment_time "$CHUNK_SECONDS" -ac 1 -ar 16000 -c:a pcm_s16le \
     "$CHUNK_DIR/chunk_%03d.wav"
 
 echo "A transcrever..."
 echo "  Modelo pedido : ${WHISPER_MODEL}"
 echo "  Lingua        : ${WHISPER_LANGUAGE}"
 echo "  Blocos        : ${CHUNK_SECONDS}s"
+echo "  Trim silêncio : ${TRIM_SILENCE} (threshold ${TRIM_THRESHOLD}, duração ${TRIM_DURATION}s)"
 "$PYTHON_BIN" - <<EOF
 import glob
 import os
-import sys
+import time
 from faster_whisper import WhisperModel
 
 audio_file = ${AUDIO_FILE@Q}
@@ -76,6 +92,9 @@ for candidate in candidates:
 if model is None:
     raise SystemExit(f"Erro: nao foi possivel carregar nenhum modelo ({', '.join(candidates)}): {last_error}")
 
+if not chunk_files:
+    raise SystemExit("Erro: não foram gerados blocos para transcrição")
+
 print(f"Modelo em uso: {active_model}", flush=True)
 
 def fmt_time(seconds):
@@ -83,12 +102,20 @@ def fmt_time(seconds):
     h, m = divmod(m, 60)
     return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
-with open(outfile, "w", encoding="utf-8") as f:
+with open(outfile, "w", encoding="utf-8", buffering=1) as f:
+    total_chunks = len(chunk_files)
+    started_at = time.time()
     f.write(f"# Reunião {os.path.basename(audio_file)}\\n\\n")
     f.write(f"_Modelo: {active_model}, língua: {language}, blocos de {chunk_seconds} segundos_\\n\\n")
+    f.flush()
+
     for index, chunk_file in enumerate(chunk_files):
         offset = index * chunk_seconds
-        print(f"Bloco {index + 1}/{len(chunk_files)}: {os.path.basename(chunk_file)}", flush=True)
+        chunk_started = time.time()
+        done = index + 1
+        pct = (done / total_chunks) * 100 if total_chunks else 100
+        print(f"Bloco {done}/{total_chunks} ({pct:.1f}%): {os.path.basename(chunk_file)}", flush=True)
+
         segments, _ = model.transcribe(
             chunk_file,
             beam_size=3,
@@ -96,10 +123,26 @@ with open(outfile, "w", encoding="utf-8") as f:
             vad_filter=True,
             condition_on_previous_text=False,
         )
+
         for segment in segments:
             text = segment.text.strip()
             if text:
                 f.write(f"[{fmt_time(segment.start + offset)}] {text}\\n")
 
+        f.flush()
+        elapsed = time.time() - started_at
+        avg_per_chunk = elapsed / done if done else 0
+        eta = int(avg_per_chunk * (total_chunks - done))
+        print(f"  -> concluído em {time.time() - chunk_started:.1f}s | ETA {fmt_time(eta)}", flush=True)
+
 print(f"OK: {outfile}")
 EOF
+
+if [[ "$ARCHIVE_OPUS" == "1" ]]; then
+    OPUS_FILE="${AUDIO_FILE%.*}.opus"
+    echo "A criar arquivo Opus..."
+    ffmpeg -hide_banner -loglevel error -y -i "$AUDIO_FILE" \
+        -c:a libopus -b:a "$OPUS_BITRATE" -vbr on -compression_level 10 -ac 1 \
+        "$OPUS_FILE"
+    echo "OK: $OPUS_FILE"
+fi
