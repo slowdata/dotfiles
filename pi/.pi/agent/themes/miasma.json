@@ -1,0 +1,82 @@
+{
+  "$schema": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+  "name": "miasma",
+  "vars": {
+    "accent":     "#78824b",
+    "gold":       "#c9a554",
+    "orange":     "#b36d43",
+    "orangeBrown":"#bb7744",
+    "green":      "#5f875f",
+    "brown":      "#685742",
+    "sand":       "#d7c483",
+    "fg":         "#c2c2b0",
+    "gray":       "#8a8a7a",
+    "midGray":    "#666660",
+    "darkGray":   "#525248",
+    "bg":         "#222222"
+  },
+  "colors": {
+    "accent":             "accent",
+    "border":             "accent",
+    "borderAccent":       "gold",
+    "borderMuted":        "#3a3a32",
+    "success":            "green",
+    "error":              "brown",
+    "warning":            "orange",
+    "muted":              "gray",
+    "dim":                "midGray",
+    "text":               "",
+    "thinkingText":       "midGray",
+
+    "selectedBg":         "#2e2e2e",
+    "userMessageBg":      "#2a2a2a",
+    "userMessageText":    "",
+    "customMessageBg":    "#2a2a2a",
+    "customMessageText":  "",
+    "customMessageLabel": "accent",
+    "toolPendingBg":      "#27271f",
+    "toolSuccessBg":      "#1f2720",
+    "toolErrorBg":        "#271f1f",
+    "toolTitle":          "accent",
+    "toolOutput":         "",
+
+    "mdHeading":          "gold",
+    "mdLink":             "accent",
+    "mdLinkUrl":          "midGray",
+    "mdCode":             "sand",
+    "mdCodeBlock":        "",
+    "mdCodeBlockBorder":  "darkGray",
+    "mdQuote":            "midGray",
+    "mdQuoteBorder":      "accent",
+    "mdHr":               "darkGray",
+    "mdListBullet":       "gold",
+
+    "toolDiffAdded":      "green",
+    "toolDiffRemoved":    "brown",
+    "toolDiffContext":    "midGray",
+
+    "syntaxComment":      "midGray",
+    "syntaxKeyword":      "orangeBrown",
+    "syntaxFunction":     "gold",
+    "syntaxVariable":     "sand",
+    "syntaxString":       "green",
+    "syntaxNumber":       "orange",
+    "syntaxType":         "accent",
+    "syntaxOperator":     "fg",
+    "syntaxPunctuation":  "midGray",
+
+    "thinkingOff":        "darkGray",
+    "thinkingMinimal":    "midGray",
+    "thinkingLow":        "accent",
+    "thinkingMedium":     "orange",
+    "thinkingHigh":       "gold",
+    "thinkingXhigh":      "orangeBrown",
+
+    "bashMode":           "orange"
+  },
+  "export": {
+    "pageBg":  "#1a1a1a",
+    "cardBg":  "#222222",
+    "infoBg":  "#2e2a1e"
+  }
+}
