@@ -28,4 +28,5 @@ claude/.claude/todos/
 
 # Pi agent runtime/state/secrets — não versionar
 pi/.pi/agent/auth.json
+pi/.pi/agent/settings.json
 pi/.pi/agent/sessions/
