@@ -55,20 +55,26 @@ Antes de alterar uma máquina, distingue sempre:
 - `hypr-omarchy-pgr/`
 
 ### O que é comum em Hyprland
-Fica em `hypr-common/`:
-- `hyprland.conf`
+Fica em `hypr-common/`, mas **apenas quando é override teu real**.
+
+Exemplo típico:
 - `bindings.conf`
-- `looknfeel.conf`
-- `autostart.conf`
-- `hypridle.conf`
-- `hyprlock.conf`
-- `hyprsunset.conf`
-- `xdph.conf`
 
 ### O que é específico da máquina
-Fica em `hypr-<hostname>/`:
+Fica em `hypr-<hostname>/`, mas **apenas quando é override teu real**.
+
+Exemplos típicos:
 - `input.conf`
 - `monitors.conf`
+
+### O que não vai para o repo
+Os defaults do Omarchy ficam fora do repo e vêm de:
+
+```bash
+~/.local/share/omarchy/config/hypr/
+```
+
+Esses ficheiros só devem ser versionados se tiverem personalização tua real.
 
 ---
 
@@ -136,16 +142,16 @@ As outras máquinas só fazem `git pull`. Não precisam aplicar o pacote `hypr-v
 
 ## Migrar Hyprland de uma máquina para os dotfiles
 
-Usar quando uma máquina ainda tem ficheiros normais em `~/.config/hypr/` em vez de symlinks para o repo.
+Usar quando queres passar para o modelo correto:
 
-### 1. Guardar a config específica da máquina no repo
-Exemplo para `viarchy`:
+- defaults do Omarchy fora do repo
+- só overrides pessoais dentro do repo
 
-```bash
-mkdir -p ~/dotfiles/hypr-viarchy/.config/hypr
-cp ~/.config/hypr/input.conf ~/dotfiles/hypr-viarchy/.config/hypr/input.conf
-cp ~/.config/hypr/monitors.conf ~/dotfiles/hypr-viarchy/.config/hypr/monitors.conf
-```
+### 1. Identificar o que é mesmo teu
+Normalmente:
+- `bindings.conf` → se tens atalhos teus
+- `input.conf` → se tens layout/teclado teu
+- `monitors.conf` → se tens layout de monitores teu
 
 ### 2. Fazer backup local
 ```bash
@@ -153,42 +159,38 @@ mkdir -p ~/.config/hypr.backup
 cp -a ~/.config/hypr/. ~/.config/hypr.backup/
 ```
 
-### 3. Remover os ficheiros que vão passar a ser geridos por Stow
+### 3. Repor defaults do Omarchy nos ficheiros base
+Exemplo:
+
 ```bash
-rm -f ~/.config/hypr/hyprland.conf \
-      ~/.config/hypr/bindings.conf \
-      ~/.config/hypr/looknfeel.conf \
-      ~/.config/hypr/autostart.conf \
-      ~/.config/hypr/hypridle.conf \
-      ~/.config/hypr/hyprlock.conf \
-      ~/.config/hypr/hyprsunset.conf \
-      ~/.config/hypr/xdph.conf \
-      ~/.config/hypr/input.conf \
-      ~/.config/hypr/monitors.conf
+cp ~/.local/share/omarchy/config/hypr/hyprland.conf ~/.config/hypr/hyprland.conf
+cp ~/.local/share/omarchy/config/hypr/looknfeel.conf ~/.config/hypr/looknfeel.conf
+cp ~/.local/share/omarchy/config/hypr/hypridle.conf ~/.config/hypr/hypridle.conf
+cp ~/.local/share/omarchy/config/hypr/hyprlock.conf ~/.config/hypr/hyprlock.conf
+cp ~/.local/share/omarchy/config/hypr/hyprsunset.conf ~/.config/hypr/hyprsunset.conf
+cp ~/.local/share/omarchy/config/hypr/xdph.conf ~/.config/hypr/xdph.conf
+cp ~/.local/share/omarchy/config/hypr/autostart.conf ~/.config/hypr/autostart.conf
 ```
 
-### 4. Aplicar Stow
-```bash
-cd ~/dotfiles
-stow hypr-common hypr-$(hostname)
-```
+### 4. Deixar nos dotfiles só os overrides reais
+Exemplo:
+- `hypr-common/.config/hypr/bindings.conf`
+- `hypr-<hostname>/.config/hypr/input.conf`
+- `hypr-<hostname>/.config/hypr/monitors.conf` (apenas se houver customização real)
 
-ou:
-
+### 5. Aplicar Stow só para esses overrides
 ```bash
 cd ~/dotfiles
 dotfiles-stow-hypr
 ```
 
-### 5. Garantir diretoria de toggles do Omarchy
-Isto evita erro no reload se a pasta estiver vazia/inexistente:
-
+### 6. Garantir diretoria de toggles do Omarchy
 ```bash
 mkdir -p ~/.local/state/omarchy/toggles/hypr
 touch ~/.local/state/omarchy/toggles/hypr/00-empty.conf
 ```
 
-### 6. Recarregar Hyprland
+### 7. Recarregar Hyprland
 Dentro da sessão gráfica:
 
 ```bash
@@ -333,14 +335,15 @@ git -C ~/dotfiles status --short
 ls -l ~/.local/bin/gravar-reuniao ~/.local/bin/transcrever-reuniao
 ```
 
-### Hypr ligado ao repo
+### Hypr no estado esperado
 ```bash
 ls -l ~/.config/hypr
 ```
 
 O esperado:
-- ficheiros comuns → `hypr-common`
-- `input.conf` e `monitors.conf` → `hypr-<hostname>`
+- ficheiros base/default → ficheiros normais em `~/.config/hypr/`
+- overrides globais → symlink para `hypr-common`
+- overrides específicos → symlink para `hypr-<hostname>`
 
 ---
 
@@ -362,15 +365,18 @@ Regra prática:
 ## Estado atual esperado
 
 ### `ossoarchy`
-- usa `hypr-common` + `hypr-ossoarchy`
+- defaults base vindos do Omarchy
+- overrides via `hypr-common` + `hypr-ossoarchy`
 - scripts de reuniões via `localbin`
 
 ### `viarchy`
-- usa `hypr-common` + `hypr-viarchy`
+- defaults base vindos do Omarchy
+- overrides via `hypr-common` + `hypr-viarchy`
 - scripts de reuniões via `localbin`
 
 ### `omarchy-pgr`
-- usa `hypr-common` + `hypr-omarchy-pgr`
+- defaults base vindos do Omarchy
+- overrides via `hypr-common` + `hypr-omarchy-pgr`
 - scripts de reuniões via `localbin`
 
 ---

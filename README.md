@@ -38,13 +38,13 @@ dotfiles/
 ├── ghostty/
 │   └── .config/ghostty/config      # Config do terminal principal
 ├── hypr-common/
-│   └── .config/hypr/               # Hyprland comum a todas as máquinas
+│   └── .config/hypr/               # Apenas overrides pessoais globais (ex: bindings)
 ├── hypr-ossoarchy/
-│   └── .config/hypr/               # Hyprland específico do ossoarchy (input/monitors)
+│   └── .config/hypr/               # Overrides específicos do ossoarchy
 ├── hypr-viarchy/
-│   └── README.md                   # Placeholder para input/monitors do viarchy
+│   └── .config/hypr/               # Overrides específicos do viarchy
 ├── hypr-omarchy-pgr/
-│   └── README.md                   # Placeholder para input/monitors do omarchy-pgr
+│   └── .config/hypr/               # Overrides específicos do omarchy-pgr
 ├── ohmyposh/
 │   └── .config/ohmyposh/           # Tema zen do oh-my-posh
 ├── pi/
@@ -123,19 +123,25 @@ dotfiles-stow-hypr
 
 ## Hyprland / Omarchy
 
-A configuração Hyprland foi dividida em duas camadas:
+A regra atual é:
 
-- `hypr-common/` → atalhos, look & feel, lock, idle, autostart, etc.
-- `hypr-<hostname>/` → apenas o que depende da máquina
-  - `input.conf`
-  - `monitors.conf`
+- **defaults do Omarchy ficam fora do repo**
+- **dotfiles guardam apenas overrides pessoais**
 
-Isto evita partir setups com teclados físicos diferentes.
+Isto evita drift e conflitos com updates do Omarchy.
+
+### Como funciona
+
+- `~/.local/share/omarchy/config/hypr/` → template/default atual do Omarchy
+- `~/.config/hypr/` → config live da máquina
+- `~/dotfiles/hypr-common/` → apenas overrides globais teus
+- `~/dotfiles/hypr-<hostname>/` → apenas overrides específicos da máquina
 
 ### Regra prática
 
-- sincronizar globalmente: `bindings.conf`, `looknfeel.conf`, `hyprlock.conf`, `hypridle.conf`, etc.
-- manter por máquina: `input.conf`, `monitors.conf`
+- **não versionar** no repo ficheiros que são apenas cópia dos defaults do Omarchy
+- sincronizar globalmente apenas overrides reais (ex: `bindings.conf`)
+- manter por máquina apenas o que é realmente específico (ex: `input.conf`, `monitors.conf` quando necessário)
 
 ### Aplicar numa máquina
 
@@ -145,6 +151,14 @@ stow hypr-common hypr-$(hostname)
 # ou
 dotfiles-stow-hypr
 ```
+
+### Se quiseres repor defaults da última atualização do Omarchy
+
+```bash
+cp ~/.local/share/omarchy/config/hypr/<ficheiro>.conf ~/.config/hypr/<ficheiro>.conf
+```
+
+Ou usar os comandos `omarchy-refresh-*` / `omarchy-refresh-config` quando apropriado.
 
 ## Estado actual por máquina
 
