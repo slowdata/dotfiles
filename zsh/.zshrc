@@ -122,7 +122,7 @@ bindkey "\e[4~" end-of-line          # End
 
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$PATH:$HOME/go/bin"
-export PATH="$PATH:$HOME/.composer/vendor/bin"
+export PATH="$HOME/.config/composer/vendor/bin:$PATH"
 export EDITOR=nvim
 
 [[ -f ~/.proxyenv ]] && source ~/.proxyenv
