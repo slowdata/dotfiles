@@ -13,14 +13,15 @@ style() {
 }
 
 info() { printf 'ℹ️  %s\n' "$*"; }
-warn() { printf '⚠️  %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*" >&2; }
 err() { printf '❌ %s\n' "$*" >&2; }
 
 pause() {
-  echo
   if [[ -r /dev/tty ]]; then
+    printf '\n' >/dev/tty
     read -rp "Enter para continuar..." _ </dev/tty || true
   else
+    printf '\n'
     read -rp "Enter para continuar..." _ || true
   fi
 }
@@ -288,7 +289,7 @@ complete_task_flow() {
 
 set_due_flow() {
   local task_id="$1" choice due payload
-  choice="$(choose "Adiar / data" "Amanhã" "Próxima semana" "Sem data" "Custom" "Voltar")"
+  choice="$(choose "Adiar / data" "Amanhã" "Próxima semana" "Sem data" "Custom" "Voltar")" || return 0
   case "$choice" in
     "Amanhã") due="tomorrow" ;;
     "Próxima semana") due="next week" ;;
@@ -305,7 +306,7 @@ set_due_flow() {
 
 set_priority_flow() {
   local task_id="$1" choice priority payload
-  choice="$(choose "Prioridade" "P1 alta" "P2" "P3" "P4 normal" "Voltar")"
+  choice="$(choose "Prioridade" "P1 alta" "P2" "P3" "P4 normal" "Voltar")" || return 0
   case "$choice" in
     "P1 alta") priority="4" ;;
     "P2") priority="3" ;;
@@ -324,7 +325,7 @@ task_actions() {
   task_id="$(task_id_from_row "$row")" || { err "Não consegui obter o ID da tarefa."; pause; return; }
   label="$row"
   while true; do
-    action="$(choose "Ação" "Ver detalhes" "Concluir" "Adiar / data" "Mudar prioridade" "Voltar")"
+    action="$(choose "Ação" "Ver detalhes" "Concluir" "Adiar / data" "Mudar prioridade" "Voltar")" || return 0
     case "$action" in
       "Ver detalhes") show_task_details "$task_id" ;;
       "Concluir") complete_task_flow "$task_id" "$label"; return ;;
@@ -338,7 +339,7 @@ task_actions() {
 browse_filter() {
   local title="$1" filter="$2" tasks_json row
   tasks_json="$(get_tasks_json "$filter")"
-  row="$(pick_task_from_json "$title" "$tasks_json")" || return
+  row="$(pick_task_from_json "$title" "$tasks_json")" || return 0
   task_actions "$row"
 }
 
@@ -346,7 +347,7 @@ browse_project() {
   local row project_id project_name tasks_json selected
   mapfile -t projects < <(project_rows)
   (( ${#projects[@]} > 0 )) || { warn "Sem projetos."; pause; return; }
-  row="$(choose "Projeto" "${projects[@]}")"
+  row="$(choose "Projeto" "${projects[@]}")" || return 0
   [[ "$row" =~ ^\[([^]]+)\]\ (.*)$ ]] || { err "Projeto inválido."; pause; return; }
   project_id="${BASH_REMATCH[1]}"
   project_name="${BASH_REMATCH[2]}"
@@ -361,7 +362,7 @@ print(json.dumps(sel, ensure_ascii=False))
 PY
 )"
   local task_row
-  task_row="$(pick_task_from_json "Projeto: $project_name" "$selected")" || return
+  task_row="$(pick_task_from_json "Projeto: $project_name" "$selected")" || return 0
   task_actions "$task_row"
 }
 
@@ -371,10 +372,10 @@ add_task_flow() {
   [[ -n "$title" ]] || { warn "Título vazio. Nada a fazer."; pause; return; }
   desc="$(input "Descrição (opcional)" "")"
   due="$(input "Due (opcional, ex: tomorrow / in 1 week)" "")"
-  priority="$(choose "Prioridade" "4 (normal)" "3" "2" "1 (alta)")"
+  priority="$(choose "Prioridade" "4 (normal)" "3" "2" "1 (alta)")" || return 0
   priority="${priority%% *}"
   mapfile -t projects < <(project_rows)
-  project_row="$(choose "Projeto" "(sem projeto / Inbox)" "${projects[@]}")"
+  project_row="$(choose "Projeto" "(sem projeto / Inbox)" "${projects[@]}")" || return 0
   project_id=""
   if [[ "$project_row" != "(sem projeto / Inbox)" ]]; then
     [[ "$project_row" =~ ^\[([^]]+)\] ]] && project_id="${BASH_REMATCH[1]}"
@@ -436,7 +437,7 @@ main_menu() {
       "Filtro custom" \
       "Captura rápida" \
       "Adicionar detalhada" \
-      "Sair")"
+      "Sair")" || break
     case "$choice" in
       "Hoje") browse_filter "Hoje" "today" ;;
       "Atrasadas") browse_filter "Atrasadas" "overdue" ;;
