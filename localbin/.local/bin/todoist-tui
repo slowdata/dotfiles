@@ -5,7 +5,8 @@ API_BASE="https://api.todoist.com/api/v1"
 DEFAULT_LIMIT="100"
 
 has() { command -v "$1" >/dev/null 2>&1; }
-use_gum() { has gum && [[ -t 0 && -t 1 ]]; }
+interactive_tty() { [[ -t 0 && -t 1 && -r /dev/tty && -w /dev/tty ]]; }
+use_gum() { has gum && interactive_tty; }
 
 style() {
   if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi
@@ -42,12 +43,26 @@ choose() {
   local header="$1"; shift
   if use_gum; then
     gum choose --header "$header" --height 18 "$@" </dev/tty
-  else
-    local options=("$@") i opt
+  elif interactive_tty; then
+    local options=("$@") opt
     echo "$header" >/dev/tty
     select opt in "${options[@]}"; do
       [[ -n "${opt:-}" ]] && { printf '%s\n' "$opt"; return 0; }
     done </dev/tty
+  else
+    err "Esta ação precisa de um terminal interativo."
+    printf '%s\n' "$header"
+    printf '  %s\n' "$@"
+    return 1
+  fi
+}
+
+filter_choose() {
+  local header="$1"; shift
+  if use_gum; then
+    printf '%s\n' "$@" | gum filter --height 20 --placeholder "$header" --prompt "󰍉 "
+  else
+    choose "$header" "$@"
   fi
 }
 
@@ -55,13 +70,12 @@ input() {
   local prompt="$1" default="${2:-}" value
   if use_gum; then
     gum input --prompt "$prompt " --value "$default" </dev/tty
-  else
-    if [[ -r /dev/tty ]]; then
-      read -rp "$prompt [$default] " value </dev/tty
-    else
-      read -rp "$prompt [$default] " value
-    fi
+  elif interactive_tty; then
+    read -rp "$prompt [$default] " value </dev/tty
     printf '%s\n' "${value:-$default}"
+  else
+    err "Input interativo indisponível: $prompt"
+    return 1
   fi
 }
 
@@ -184,7 +198,7 @@ for task in tasks:
     priority = priority_label(task.get('priority', 1))
     labels = task.get('labels') or []
     label_text = f" | labels:{','.join(labels)}" if labels else ''
-    print(f"[{tid}] {content} — {priority} | {due} | {project}{label_text}")
+    print(f"{priority:<2}  {due:<14}  {project:<12}  {content}  [{tid}]{label_text}")
 PY
 }
 
@@ -197,12 +211,12 @@ pick_task_from_json() {
     return 1
   fi
   mapfile -t options <<<"$rows"
-  choose "$header" "${options[@]}"
+  filter_choose "$header" "${options[@]}"
 }
 
 task_id_from_row() {
   local row="$1"
-  [[ "$row" =~ ^\[([^]]+)\] ]] || return 1
+  [[ "$row" =~ \[([^]]+)\]($|[[:space:]]\|) ]] || return 1
   printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
@@ -324,7 +338,11 @@ main_menu() {
   local choice
   while true; do
     clear
-    style "Todoist TUI"
+    if use_gum; then
+      gum style --border rounded --padding "0 2" --foreground 212 --bold "Todoist TUI"
+    else
+      style "Todoist TUI"
+    fi
     echo
     choice="$(choose "Escolhe uma vista" \
       "Hoje" \
