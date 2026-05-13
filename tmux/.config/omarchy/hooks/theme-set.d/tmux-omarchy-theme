@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Regenerate and reload tmux colors after Omarchy theme changes.
+exec "$HOME/.local/bin/tmux-omarchy-theme"
