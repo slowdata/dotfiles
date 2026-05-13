@@ -262,7 +262,7 @@ task_id_from_row() {
 show_task_details() {
   local task_id="$1" task_json all_tasks_json
   task_json="$(get_task_json "$task_id")"
-  all_tasks_json="$(get_tasks_json "" "300")"
+  all_tasks_json="$(get_tasks_json "" "200")"
   TASK_JSON="$task_json" ALL_TASKS_JSON="$all_tasks_json" PROJECTS_JSON="$(projects_cache)" python3 <<'PY'
 import json, os
 raw = json.loads(os.environ['TASK_JSON'])
