@@ -43,7 +43,7 @@ confirm() {
 choose() {
   local header="$1"; shift
   if use_gum; then
-    gum choose --header "$header  ·  ↩ Início = voltar" --height 18 "$@" </dev/tty
+    gum choose --header "$header" --height 18 "$@" </dev/tty
   elif interactive_tty; then
     local options=("$@") opt
     echo "$header" >/dev/tty
@@ -61,7 +61,7 @@ choose() {
 filter_choose() {
   local header="$1"; shift
   if use_gum; then
-    printf '%s\n' "$@" | gum filter --height 20 --header "$header  ·  ↩ Início = voltar" --placeholder "filtrar..." --prompt "󰍉 "
+    printf '%s\n' "$@" | gum filter --height 20 --placeholder "$header" --prompt "󰍉 "
   else
     choose "$header" "$@"
   fi
@@ -311,13 +311,12 @@ complete_task_flow() {
 
 set_due_flow() {
   local task_id="$1" choice due payload
-  choice="$(choose "Adiar / data" "Amanhã" "Próxima semana" "Sem data" "Custom" "↩ Início" "Voltar")" || return 0
+  choice="$(choose "Adiar / data" "Amanhã" "Próxima semana" "Sem data" "Custom" "Voltar")" || return 0
   case "$choice" in
     "Amanhã") due="tomorrow" ;;
     "Próxima semana") due="next week" ;;
     "Sem data") due="no date" ;;
     "Custom") due="$(input "Due Todoist" "tomorrow")" ;;
-    "↩ Início") return ;;
     "Voltar") return ;;
   esac
   [[ -n "${due:-}" ]] || return
@@ -329,13 +328,12 @@ set_due_flow() {
 
 set_priority_flow() {
   local task_id="$1" choice priority payload
-  choice="$(choose "Prioridade" "P1 alta" "P2" "P3" "P4 normal" "↩ Início" "Voltar")" || return 0
+  choice="$(choose "Prioridade" "P1 alta" "P2" "P3" "P4 normal" "Voltar")" || return 0
   case "$choice" in
     "P1 alta") priority="4" ;;
     "P2") priority="3" ;;
     "P3") priority="2" ;;
     "P4 normal") priority="1" ;;
-    "↩ Início") return ;;
     "Voltar") return ;;
   esac
   payload="$(PRIORITY="$priority" json_update_payload)"
@@ -349,13 +347,12 @@ task_actions() {
   task_id="$(task_id_from_row "$row")" || { err "Não consegui obter o ID da tarefa."; pause; return; }
   label="$row"
   while true; do
-    action="$(choose "Ação" "Ver detalhes" "Concluir" "Adiar / data" "Mudar prioridade" "↩ Início" "Voltar")" || return 0
+    action="$(choose "Ação" "Ver detalhes" "Concluir" "Adiar / data" "Mudar prioridade" "Voltar")" || return 0
     case "$action" in
       "Ver detalhes") show_task_details "$task_id" ;;
       "Concluir") complete_task_flow "$task_id" "$label"; return ;;
       "Adiar / data") set_due_flow "$task_id" ; return ;;
       "Mudar prioridade") set_priority_flow "$task_id" ; return ;;
-      "↩ Início") return ;;
       "Voltar") return ;;
     esac
   done
