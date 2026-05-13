@@ -260,9 +260,10 @@ task_id_from_row() {
 }
 
 show_task_details() {
-  local task_id="$1" task_json
+  local task_id="$1" task_json all_tasks_json
   task_json="$(get_task_json "$task_id")"
-  TASK_JSON="$task_json" PROJECTS_JSON="$(projects_cache)" python3 <<'PY'
+  all_tasks_json="$(get_tasks_json "" "300")"
+  TASK_JSON="$task_json" ALL_TASKS_JSON="$all_tasks_json" PROJECTS_JSON="$(projects_cache)" python3 <<'PY'
 import json, os
 raw = json.loads(os.environ['TASK_JSON'])
 projects_raw = json.loads(os.environ['PROJECTS_JSON'])
@@ -286,6 +287,16 @@ desc = task.get('description') or ''
 if desc:
     print("\nDescrição:\n")
     print(desc)
+
+raw_tasks = json.loads(os.environ['ALL_TASKS_JSON'])
+all_tasks = raw_tasks if isinstance(raw_tasks, list) else raw_tasks.get('results', [])
+children = [t for t in all_tasks if str(t.get('parent_id') or '') == str(task.get('id'))]
+if children:
+    print("\nSubtarefas:\n")
+    for child in sorted(children, key=lambda t: t.get('child_order') or 0):
+        c_priority = {4:'P1',3:'P2',2:'P3',1:'P4'}.get(child.get('priority',1), str(child.get('priority','')))
+        c_due = (child.get('due') or {}).get('string') or (child.get('due') or {}).get('date') or 'sem data'
+        print(f"- [ ] {child.get('content','')}  — {c_priority} | {c_due} | {child.get('id','')}")
 PY
   pause
 }
