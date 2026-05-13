@@ -5,6 +5,63 @@ host="${1:-$(hostname)}"
 repo="$HOME/dotfiles"
 common_pkg="hypr-common"
 host_pkg="hypr-$host"
+hypr_dir="$HOME/.config/hypr"
+omarchy_defaults="$HOME/.local/share/omarchy/config/hypr"
+backup_dir=""
+
+backup_once() {
+  if [ -z "$backup_dir" ]; then
+    backup_dir="$hypr_dir/backup-dotfiles-stow-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$backup_dir"
+  fi
+}
+
+repair_broken_link() {
+  link="$1"
+
+  [ -L "$link" ] || return 0
+  [ ! -e "$link" ] || return 0
+
+  target=$(readlink "$link" || true)
+  case "$target" in
+    ../../dotfiles/hypr-*|../../dotfiles/hypr-common/*|"$repo"/hypr-*|"$repo"/hypr-common/*)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  file=$(basename "$link")
+  default="$omarchy_defaults/$file"
+
+  if [ ! -f "$default" ]; then
+    echo "Warning: broken Hypr link without Omarchy default: $link" >&2
+    return 0
+  fi
+
+  backup_once
+  mv "$link" "$backup_dir/$file"
+  cp "$default" "$link"
+  echo "Restored Omarchy default: $file"
+}
+
+prepare_target_for_stow() {
+  src="$1"
+  rel="${src#*/}"
+  target="$HOME/$rel"
+
+  [ -e "$target" ] || [ -L "$target" ] || return 0
+
+  if [ -L "$target" ]; then
+    src_abs=$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")
+    target_abs=$(readlink -f "$target" 2>/dev/null || true)
+    [ "$src_abs" = "$target_abs" ] && return 0
+  fi
+
+  backup_once
+  mv "$target" "$backup_dir/$(basename "$target")"
+  echo "Backed up conflicting Hypr target: $(basename "$target")"
+}
 
 cd "$repo"
 
@@ -18,6 +75,29 @@ if [ ! -d "$host_pkg" ]; then
   exit 1
 fi
 
+mkdir -p "$hypr_dir"
+for link in "$hypr_dir"/*.conf; do
+  repair_broken_link "$link"
+done
+
+for src in "$common_pkg"/.config/hypr/* "$host_pkg"/.config/hypr/*; do
+  [ -f "$src" ] || continue
+  prepare_target_for_stow "$src"
+done
+
 stow "$common_pkg" "$host_pkg"
 
 echo "Applied: $common_pkg $host_pkg"
+if [ -n "$backup_dir" ]; then
+  echo "Backup: $backup_dir"
+fi
+
+if command -v hyprctl >/dev/null 2>&1 && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
+  hyprctl reload >/dev/null 2>&1 || true
+  errors=$(hyprctl configerrors 2>/dev/null || true)
+  if [ -z "$errors" ]; then
+    echo "Hyprland config: OK"
+  else
+    printf '%s\n' "$errors"
+  fi
+fi

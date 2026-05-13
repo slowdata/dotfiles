@@ -107,6 +107,7 @@ dotfiles-stow-hypr
 ```
 
 > Nota: normalmente não é preciso re-stow tudo após `git pull`, mas é seguro quando adicionaste pacotes novos ou mudaste a estrutura.
+> O `dotfiles-stow-hypr` é o caminho preferido porque também repara symlinks Hypr antigos/partidos para defaults do Omarchy.
 
 ---
 
@@ -293,6 +294,28 @@ git push
 
 ---
 
+### Caso 3: depois do `git pull` o Hypr fica sem tema / barra / layout / teclado
+Isto costuma indicar que havia symlinks antigos em `~/.config/hypr/` para ficheiros que entretanto saíram do repo.
+
+Resolver com:
+
+```bash
+cd ~/dotfiles
+dotfiles-stow-hypr
+```
+
+O helper faz duas coisas:
+1. repara symlinks Hypr partidos que apontavam para `~/dotfiles/hypr-*`, restaurando os defaults correspondentes do Omarchy
+2. volta a aplicar `hypr-common` + `hypr-$(hostname)`
+
+Se ainda houver sessão gráfica estranha após isso, reaplica o tema atual:
+
+```bash
+omarchy theme set "$(omarchy theme current)"
+```
+
+---
+
 ## Checklist rápido por máquina
 
 ### `ossoarchy`
@@ -319,7 +342,8 @@ stow tmux zsh localbin
 dotfiles-stow-hypr
 ```
 
-> O `dotfiles-stow-hypr` aplica automaticamente `hypr-common` + `hypr-<hostname>`.
+> O `dotfiles-stow-hypr` aplica automaticamente `hypr-common` + `hypr-<hostname>` e tenta reparar symlinks Hypr antigos/partidos.
+> Se tiver havido uma mudança estrutural no repo, usa este helper em vez de `stow hypr-common hypr-$(hostname)`.
 
 ---
 

@@ -107,8 +107,8 @@ touch ~/.zshrc.local
 ```bash
 cd ~/dotfiles
 git pull
-# Normalmente os symlinks já apontam para os ficheiros actualizados.
-# Se adicionaste um novo pacote Hypr para a máquina atual, re-aplica:
+# Re-aplica os overrides Hypr da máquina atual.
+# O helper também repara symlinks Hypr antigos/partidos para defaults do Omarchy.
 dotfiles-stow-hypr
 ```
 
@@ -148,7 +148,7 @@ Isto evita drift e conflitos com updates do Omarchy.
 ```bash
 cd ~/dotfiles
 stow hypr-common hypr-$(hostname)
-# ou
+# ou (preferível)
 dotfiles-stow-hypr
 ```
 
