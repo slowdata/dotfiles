@@ -283,6 +283,7 @@ export TODOIST_API_TOKEN=...
 | `todoist-overdue` | Listar tarefas atrasadas                   |
 | `todoist-urgent`  | Listar tarefas urgentes (today/overdue/p1) |
 | `todoist-projects`| Listar projetos da Todoist                 |
+| `todoist`         | Atalho principal para a TUI da Todoist     |
 | `todoist-tui`     | TUI simples para navegar e gerir tarefas   |
 
 ---
@@ -322,10 +323,11 @@ todoist-today
 todoist-overdue
 todoist-urgent
 todoist-projects
-todoist-tui
+todoist       # atalho principal
+todoist-tui   # nome explícito
 ```
 
-### `todoist-tui`
+### `todoist` / `todoist-tui`
 
 TUI simples em bash + gum, inspirada no `reunioes`, para:
 - ver Hoje / Urgente / Inbox
