@@ -43,7 +43,7 @@ confirm() {
 choose() {
   local header="$1"; shift
   if use_gum; then
-    gum choose --header "$header  ·  Esc = início/voltar" --height 18 "$@" </dev/tty
+    gum choose --header "$header  ·  ↩ Início = voltar" --height 18 "$@" </dev/tty
   elif interactive_tty; then
     local options=("$@") opt
     echo "$header" >/dev/tty
@@ -61,7 +61,7 @@ choose() {
 filter_choose() {
   local header="$1"; shift
   if use_gum; then
-    printf '%s\n' "$@" | gum filter --height 20 --header "$header  ·  Esc = início/voltar" --placeholder "filtrar..." --prompt "󰍉 "
+    printf '%s\n' "$@" | gum filter --height 20 --header "$header  ·  ↩ Início = voltar" --placeholder "filtrar..." --prompt "󰍉 "
   else
     choose "$header" "$@"
   fi
