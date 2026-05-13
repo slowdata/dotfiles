@@ -216,6 +216,7 @@ projects_raw = json.loads(os.environ['PROJECTS_JSON'])
 tasks = raw if isinstance(raw, list) else raw.get('results', [])
 projects = projects_raw if isinstance(projects_raw, list) else projects_raw.get('results', [])
 project_map = {str(p.get('id')): p.get('name','') for p in projects}
+task_map = {str(t.get('id')): t for t in tasks}
 
 def priority_label(value):
     return {4:'P1',3:'P2',2:'P3',1:'P4'}.get(value, f'P{value}')
@@ -223,6 +224,14 @@ def priority_label(value):
 for task in tasks:
     tid = task.get('id','')
     content = ' '.join(str(task.get('content','')).split())
+    parent_id = task.get('parent_id')
+    parent = task_map.get(str(parent_id)) if parent_id else None
+    prefix = '↳ ' if parent_id else '  '
+    if parent:
+        parent_title = ' '.join(str(parent.get('content','')).split())
+        content = f"{prefix}{content}  < {parent_title}"
+    else:
+        content = f"{prefix}{content}"
     due = (task.get('due') or {}).get('string') or (task.get('due') or {}).get('date') or 'sem data'
     project = project_map.get(str(task.get('project_id','')), str(task.get('project_id','')))
     priority = priority_label(task.get('priority', 1))
@@ -267,6 +276,8 @@ labels = ', '.join(task.get('labels') or []) or '—'
 print(task.get('content',''))
 print('=' * len(task.get('content','')))
 print(f"ID: {task.get('id','')}")
+if task.get('parent_id'):
+    print(f"Parent ID: {task.get('parent_id')}")
 print(f"Projeto: {project}")
 print(f"Prioridade: {priority}")
 print(f"Due: {due}")
