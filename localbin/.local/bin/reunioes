@@ -1,0 +1,370 @@
+#!/bin/bash
+
+set -euo pipefail
+
+REUNIOES_DIR="${REUNIOES_DIR:-$HOME/Sync/Reunioes}"
+WHISPER_MODEL_DEFAULT="${WHISPER_MODEL_DEFAULT:-large-v3}"
+CHUNK_SECONDS_DEFAULT="${CHUNK_SECONDS_DEFAULT:-180}"
+OPUS_BITRATE="${OPUS_BITRATE:-48k}"
+KEEP_WAV_DAYS="${KEEP_WAV_DAYS:-14}"
+
+has() { command -v "$1" >/dev/null 2>&1; }
+use_gum() { has gum && [[ -t 0 && -t 1 ]]; }
+
+style() {
+  if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi
+}
+
+info() { printf 'ℹ️  %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*"; }
+err() { printf '❌ %s\n' "$*" >&2; }
+
+pause() {
+  echo
+  if [[ -r /dev/tty ]]; then
+    read -rp "Enter para continuar..." _ </dev/tty || true
+  else
+    read -rp "Enter para continuar..." _ || true
+  fi
+}
+
+confirm() {
+  local prompt="$1" answer
+  if use_gum; then
+    gum confirm "$prompt" </dev/tty >/dev/tty
+  else
+    if [[ -r /dev/tty ]]; then
+      read -rp "$prompt [y/N] " answer </dev/tty
+    else
+      read -rp "$prompt [y/N] " answer
+    fi
+    [[ "${answer,,}" == "y" || "${answer,,}" == "yes" || "${answer,,}" == "s" || "${answer,,}" == "sim" ]]
+  fi
+}
+
+choose() {
+  local header="$1"; shift
+  if use_gum; then
+    # Passar opções como argumentos evita problemas de stdin/TTY em algumas versões do gum.
+    # Ler de /dev/tty evita que command substitution deixe o menu sem input.
+    gum choose --header "$header" --height 15 "$@" </dev/tty
+  else
+    local options=("$@") i opt
+    echo "$header" >/dev/tty
+    select opt in "${options[@]}"; do
+      [[ -n "${opt:-}" ]] && { printf '%s\n' "$opt"; return 0; }
+    done </dev/tty
+  fi
+}
+
+input() {
+  local prompt="$1" default="${2:-}" value
+  if use_gum; then
+    gum input --prompt "$prompt " --value "$default" </dev/tty
+  else
+    if [[ -r /dev/tty ]]; then
+      read -rp "$prompt [$default] " value </dev/tty
+    else
+      read -rp "$prompt [$default] " value
+    fi
+    printf '%s\n' "${value:-$default}"
+  fi
+}
+
+file_base() {
+  local f="$1"
+  printf '%s' "${f%.*}"
+}
+
+human_size() {
+  if has numfmt; then numfmt --to=iec --suffix=B "$1"; else printf '%sB' "$1"; fi
+}
+
+file_size() {
+  stat -c '%s' "$1" 2>/dev/null || printf '0'
+}
+
+meeting_rows() {
+  shopt -s nullglob
+  local seen=() files=() f base key wav md opus size_wav size_opus saved status date name
+  for f in "$REUNIOES_DIR"/reuniao_*.*; do
+    [[ -f "$f" ]] || continue
+    case "$f" in *.wav|*.md|*.opus) ;; *) continue;; esac
+    base="$(file_base "$f")"
+    key="${base##*/}"
+    if [[ " ${seen[*]} " != *" $key "* ]]; then
+      seen+=("$key")
+      files+=("$base")
+    fi
+  done
+
+  printf 'Data\tHora\tWAV\tMD\tOPUS\tPoupança\tBase\n'
+  for base in "${files[@]}"; do
+    wav="$base.wav"; md="$base.md"; opus="$base.opus"
+    [[ -e "$wav" ]] && status="✅" || status="—"
+    local wav_s="$status"
+    [[ -e "$md" ]] && status="✅" || status="—"
+    local md_s="$status"
+    [[ -e "$opus" ]] && status="✅" || status="—"
+    local opus_s="$status"
+    saved="—"
+    if [[ -e "$wav" && -e "$opus" ]]; then
+      size_wav=$(file_size "$wav"); size_opus=$(file_size "$opus")
+      if (( size_wav > size_opus )); then saved="$(human_size $((size_wav - size_opus)))"; fi
+    fi
+    name="${base##*/}"
+    if [[ "$name" =~ reuniao_([0-9]{4}-[0-9]{2}-[0-9]{2})_([0-9]{2})([0-9]{2}) ]]; then
+      date="${BASH_REMATCH[1]}"; hour="${BASH_REMATCH[2]}:${BASH_REMATCH[3]}"
+    else
+      date="?"; hour="?"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$date" "$hour" "$wav_s" "$md_s" "$opus_s" "$saved" "$name"
+  done | sort
+}
+
+show_status() {
+  style "Reuniões — estado"
+  echo "Pasta: $REUNIOES_DIR"
+  echo
+  if use_gum; then
+    # --print mostra a tabela e sai; sem isto o gum table fica em modo interativo.
+    meeting_rows | gum table --separator $'\t' --height 25 --print
+  else
+    meeting_rows | column -t -s $'\t'
+  fi
+}
+
+pending_transcriptions() {
+  shopt -s nullglob
+  local wav base
+  for wav in "$REUNIOES_DIR"/*.wav "$REUNIOES_DIR"/*.opus; do
+    [[ -f "$wav" ]] || continue
+    base="$(file_base "$wav")"
+    [[ -f "$base.md" ]] || printf '%s\n' "$wav"
+  done
+}
+
+choose_audio_file() {
+  local prompt="$1"
+  mapfile -t files < <(pending_transcriptions)
+  if (( ${#files[@]} == 0 )); then
+    warn "Não há áudio pendente de transcrição."
+    return 1
+  fi
+  choose "$prompt" "${files[@]}"
+}
+
+transcribe_pending() {
+  local audio lang archive model chunks
+  audio="$(choose_audio_file "Áudio para transcrever")" || { pause; return; }
+  lang="$(choose "Língua" "pt" "en" "auto")"
+  [[ "$lang" == "auto" ]] && lang=""
+  model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
+  chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
+
+  archive="0"
+  if confirm "Criar OPUS no fim da transcrição? (mantém WAV)"; then archive="1"; fi
+
+  echo
+  info "A transcrever: $audio"
+  info "Modelo=$model Língua=${lang:-auto} Chunks=$chunks ARCHIVE_OPUS=$archive"
+  echo
+  if [[ -n "$lang" ]]; then
+    WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio"
+  else
+    WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio"
+  fi
+  pause
+}
+
+archive_candidates() {
+  shopt -s nullglob
+  local wav base
+  for wav in "$REUNIOES_DIR"/*.wav; do
+    [[ -f "$wav" ]] || continue
+    base="$(file_base "$wav")"
+    [[ -f "$base.md" && ! -f "$base.opus" ]] && printf '%s\n' "$wav"
+  done
+}
+
+make_opus() {
+  local wav="$1" opus="${wav%.*}.opus"
+  ffmpeg -hide_banner -loglevel error -y -i "$wav" \
+    -c:a libopus -b:a "$OPUS_BITRATE" -vbr on -compression_level 10 -ac 1 \
+    "$opus"
+}
+
+archive_one() {
+  mapfile -t files < <(archive_candidates)
+  if (( ${#files[@]} == 0 )); then
+    warn "Não há WAV com MD e sem OPUS."
+    pause; return
+  fi
+  local wav opus
+  wav="$(choose "WAV para arquivar em OPUS" "${files[@]}")"
+  [[ -n "$wav" ]] || return
+  info "A criar OPUS: $wav"
+  make_opus "$wav"
+  opus="${wav%.*}.opus"
+  info "Criado: $opus"
+  pause
+}
+
+archive_all() {
+  mapfile -t files < <(archive_candidates)
+  if (( ${#files[@]} == 0 )); then
+    warn "Não há WAV com MD e sem OPUS."
+    pause; return
+  fi
+  printf '%s\n' "${files[@]}"
+  echo
+  confirm "Criar OPUS para ${#files[@]} ficheiro(s)?" || return
+  local wav opus n=0 total=${#files[@]}
+  for wav in "${files[@]}"; do
+    n=$((n + 1))
+    opus="${wav%.*}.opus"
+    info "[$n/$total] A arquivar: $wav"
+    if make_opus "$wav"; then
+      info "[$n/$total] OK: $opus"
+    else
+      err "[$n/$total] Falhou: $wav"
+      return 1
+    fi
+  done
+  pause
+}
+
+cleanup_candidates() {
+  find "$REUNIOES_DIR" -maxdepth 1 -type f -name '*.wav' -mtime +"$KEEP_WAV_DAYS" -print | while read -r wav; do
+    base="$(file_base "$wav")"
+    [[ -f "$base.md" && -f "$base.opus" ]] && printf '%s\n' "$wav"
+  done
+}
+
+cleanup_wavs() {
+  local days
+  days="$(input "Apagar WAV com mais de N dias" "$KEEP_WAV_DAYS")"
+  KEEP_WAV_DAYS="$days"
+  mapfile -t files < <(cleanup_candidates)
+  if (( ${#files[@]} == 0 )); then
+    warn "Nenhum WAV elegível. Regra: idade > ${KEEP_WAV_DAYS} dias + MD + OPUS existentes."
+    pause; return
+  fi
+  echo "Elegíveis para apagar:"
+  printf '  %s\n' "${files[@]}"
+  echo
+  confirm "Apagar estes ${#files[@]} WAV? (irreversível)" || return
+  local f
+  for f in "${files[@]}"; do
+    rm -v -- "$f"
+  done
+  pause
+}
+
+record_meeting() {
+  info "Vou chamar: gravar-reuniao"
+  info "A gravação fica em: $REUNIOES_DIR"
+  echo
+  gravar-reuniao
+  pause
+}
+
+open_folder() {
+  if has xdg-open; then xdg-open "$REUNIOES_DIR" >/dev/null 2>&1 & disown || true; fi
+  info "$REUNIOES_DIR"
+  pause
+}
+
+show_help() {
+  cat <<'EOF'
+Workflow recomendado
+
+1. reunioes → Gravar nova reunião
+   - chama gravar-reuniao
+   - cria WAV em ~/Sync/Reunioes
+
+2. reunioes → Transcrever áudio pendente
+   - usa large-v3 por defeito
+   - escolhe pt/en
+   - pode criar OPUS no fim
+   - mantém WAV sempre
+
+3. Rever transcrição (.md)
+   - usar para resumo Logseq
+
+4. Arquivar WAV para OPUS
+   - só arquiva WAV que já têm MD
+   - não apaga WAV
+
+5. Limpar WAV antigos
+   - só apaga WAV com mais de N dias
+   - só se existir MD + OPUS
+   - pede confirmação explícita
+
+Variáveis úteis
+
+REUNIOES_DIR=~/Sync/Reunioes
+WHISPER_MODEL_DEFAULT=large-v3
+CHUNK_SECONDS_DEFAULT=180
+OPUS_BITRATE=48k
+KEEP_WAV_DAYS=14
+
+Comandos diretos
+
+reunioes gravar
+reunioes status
+reunioes transcrever
+reunioes arquivar
+reunioes arquivar-tudo
+reunioes limpar
+reunioes help
+EOF
+  pause
+}
+
+main_menu() {
+  while true; do
+    clear || true
+    style "🎙 Reuniões"
+    echo "Pasta: $REUNIOES_DIR"
+    echo
+    choice="$(choose "Escolhe" \
+      "Gravar nova reunião" \
+      "Ver estado" \
+      "Transcrever áudio pendente" \
+      "Arquivar um WAV para OPUS" \
+      "Arquivar todos os WAV elegíveis" \
+      "Limpar WAV antigos" \
+      "Abrir pasta" \
+      "Help" \
+      "Sair")"
+    case "$choice" in
+      "Gravar nova reunião") record_meeting ;;
+      "Ver estado") show_status; pause ;;
+      "Transcrever áudio pendente") transcribe_pending ;;
+      "Arquivar um WAV para OPUS") archive_one ;;
+      "Arquivar todos os WAV elegíveis") archive_all ;;
+      "Limpar WAV antigos") cleanup_wavs ;;
+      "Abrir pasta") open_folder ;;
+      "Help") show_help ;;
+      "Sair"|"") break ;;
+    esac
+  done
+}
+
+cmd="${1:-menu}"
+case "$cmd" in
+  menu) main_menu ;;
+  gravar) record_meeting ;;
+  status) show_status ;;
+  transcrever) transcribe_pending ;;
+  arquivar) archive_one ;;
+  arquivar-tudo) archive_all ;;
+  limpar) cleanup_wavs ;;
+  help|-h|--help) show_help ;;
+  *)
+    err "Comando desconhecido: $cmd"
+    echo "Usa: reunioes help"
+    exit 2
+    ;;
+esac
