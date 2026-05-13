@@ -127,9 +127,38 @@ get_task_json() {
   todoist_api GET "/tasks/$task_id"
 }
 
+update_task() {
+  local task_id="$1" data="$2"
+  todoist_api POST "/tasks/$task_id" "$data" >/dev/null
+}
+
 close_task() {
   local task_id="$1"
   todoist_api POST "/tasks/$task_id/close" >/dev/null
+}
+
+quick_add_task() {
+  local text="$1" payload
+  payload=$(TEXT="$text" python3 <<'PY'
+import json, os
+print(json.dumps({"text": os.environ["TEXT"]}, ensure_ascii=False))
+PY
+)
+  todoist_api POST "/tasks/quick" "$payload"
+}
+
+json_update_payload() {
+  python3 <<'PY'
+import json, os
+payload = {}
+if os.environ.get("DUE_STRING"):
+    payload["due_string"] = os.environ["DUE_STRING"]
+if os.environ.get("DUE_LANG"):
+    payload["due_lang"] = os.environ["DUE_LANG"]
+if os.environ.get("PRIORITY"):
+    payload["priority"] = int(os.environ["PRIORITY"])
+print(json.dumps(payload, ensure_ascii=False))
+PY
 }
 
 priority_num_to_label() {
@@ -257,15 +286,50 @@ complete_task_flow() {
   pause
 }
 
+set_due_flow() {
+  local task_id="$1" choice due payload
+  choice="$(choose "Adiar / data" "Amanhã" "Próxima semana" "Sem data" "Custom" "Voltar")"
+  case "$choice" in
+    "Amanhã") due="tomorrow" ;;
+    "Próxima semana") due="next week" ;;
+    "Sem data") due="no date" ;;
+    "Custom") due="$(input "Due Todoist" "tomorrow")" ;;
+    "Voltar") return ;;
+  esac
+  [[ -n "${due:-}" ]] || return
+  payload="$(DUE_STRING="$due" DUE_LANG="en" json_update_payload)"
+  update_task "$task_id" "$payload"
+  info "Data atualizada: $due"
+  pause
+}
+
+set_priority_flow() {
+  local task_id="$1" choice priority payload
+  choice="$(choose "Prioridade" "P1 alta" "P2" "P3" "P4 normal" "Voltar")"
+  case "$choice" in
+    "P1 alta") priority="4" ;;
+    "P2") priority="3" ;;
+    "P3") priority="2" ;;
+    "P4 normal") priority="1" ;;
+    "Voltar") return ;;
+  esac
+  payload="$(PRIORITY="$priority" json_update_payload)"
+  update_task "$task_id" "$payload"
+  info "Prioridade atualizada: ${choice}"
+  pause
+}
+
 task_actions() {
   local row="$1" task_id label action
   task_id="$(task_id_from_row "$row")" || { err "Não consegui obter o ID da tarefa."; pause; return; }
   label="$row"
   while true; do
-    action="$(choose "Ação" "Ver detalhes" "Concluir" "Voltar")"
+    action="$(choose "Ação" "Ver detalhes" "Concluir" "Adiar / data" "Mudar prioridade" "Voltar")"
     case "$action" in
       "Ver detalhes") show_task_details "$task_id" ;;
       "Concluir") complete_task_flow "$task_id" "$label"; return ;;
+      "Adiar / data") set_due_flow "$task_id" ; return ;;
+      "Mudar prioridade") set_priority_flow "$task_id" ; return ;;
       "Voltar") return ;;
     esac
   done
@@ -327,6 +391,23 @@ add_task_flow() {
   pause
 }
 
+quick_add_flow() {
+  local text response
+  text="$(input "Captura rápida Todoist" "")"
+  [[ -n "$text" ]] || { warn "Texto vazio. Nada a fazer."; pause; return; }
+  response="$(quick_add_task "$text")"
+  RESPONSE="$response" python3 <<'PY'
+import json, os
+resp = json.loads(os.environ["RESPONSE"])
+print("Tarefa criada com sucesso")
+print(f"- conteúdo: {resp.get('content', '')}")
+due = resp.get('due') or {}
+if due:
+    print(f"- due: {due.get('string') or due.get('date')}")
+PY
+  pause
+}
+
 custom_filter_flow() {
   local filter
   filter="$(input "Filtro Todoist" "today | overdue")"
@@ -346,19 +427,27 @@ main_menu() {
     echo
     choice="$(choose "Escolhe uma vista" \
       "Hoje" \
-      "Urgente" \
+      "Atrasadas" \
+      "Esta semana" \
+      "P1/P2" \
+      "Sem data" \
       "Inbox" \
       "Por projeto" \
       "Filtro custom" \
-      "Adicionar tarefa" \
+      "Captura rápida" \
+      "Adicionar detalhada" \
       "Sair")"
     case "$choice" in
       "Hoje") browse_filter "Hoje" "today" ;;
-      "Urgente") browse_filter "Urgente" "overdue | today | p1" ;;
+      "Atrasadas") browse_filter "Atrasadas" "overdue" ;;
+      "Esta semana") browse_filter "Esta semana" "7 days" ;;
+      "P1/P2") browse_filter "P1/P2" "p1 | p2" ;;
+      "Sem data") browse_filter "Sem data" "no date" ;;
       "Inbox") browse_filter "Inbox" "#Inbox" ;;
       "Por projeto") browse_project ;;
       "Filtro custom") custom_filter_flow ;;
-      "Adicionar tarefa") add_task_flow ;;
+      "Captura rápida") quick_add_flow ;;
+      "Adicionar detalhada") add_task_flow ;;
       "Sair") break ;;
     esac
   done

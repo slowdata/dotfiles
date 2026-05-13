@@ -330,11 +330,14 @@ todoist-tui   # nome explícito
 ### `todoist` / `todoist-tui`
 
 TUI simples em bash + gum, inspirada no `reunioes`, para:
-- ver Hoje / Urgente / Inbox
+- ver Hoje / Atrasadas / Esta semana / P1-P2 / Sem data / Inbox
 - navegar por projeto
 - aplicar filtro custom
-- adicionar tarefa
+- captura rápida via Quick Add
+- adicionar tarefa detalhada
 - concluir tarefa
+- adiar / alterar data
+- mudar prioridade
 - ver detalhes
 
 ---
