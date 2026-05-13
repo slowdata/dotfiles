@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+API_BASE="https://api.todoist.com/api/v1"
+DEFAULT_LIMIT="100"
+
+has() { command -v "$1" >/dev/null 2>&1; }
+use_gum() { has gum && [[ -t 0 && -t 1 ]]; }
+
+style() {
+  if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi
+}
+
+info() { printf 'ℹ️  %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*"; }
+err() { printf '❌ %s\n' "$*" >&2; }
+
+pause() {
+  echo
+  if [[ -r /dev/tty ]]; then
+    read -rp "Enter para continuar..." _ </dev/tty || true
+  else
+    read -rp "Enter para continuar..." _ || true
+  fi
+}
+
+confirm() {
+  local prompt="$1" answer
+  if use_gum; then
+    gum confirm "$prompt" </dev/tty >/dev/tty
+  else
+    if [[ -r /dev/tty ]]; then
+      read -rp "$prompt [y/N] " answer </dev/tty
+    else
+      read -rp "$prompt [y/N] " answer
+    fi
+    [[ "${answer,,}" == "y" || "${answer,,}" == "yes" || "${answer,,}" == "s" || "${answer,,}" == "sim" ]]
+  fi
+}
+
+choose() {
+  local header="$1"; shift
+  if use_gum; then
+    gum choose --header "$header" --height 18 "$@" </dev/tty
+  else
+    local options=("$@") i opt
+    echo "$header" >/dev/tty
+    select opt in "${options[@]}"; do
+      [[ -n "${opt:-}" ]] && { printf '%s\n' "$opt"; return 0; }
+    done </dev/tty
+  fi
+}
+
+input() {
+  local prompt="$1" default="${2:-}" value
+  if use_gum; then
+    gum input --prompt "$prompt " --value "$default" </dev/tty
+  else
+    if [[ -r /dev/tty ]]; then
+      read -rp "$prompt [$default] " value </dev/tty
+    else
+      read -rp "$prompt [$default] " value
+    fi
+    printf '%s\n' "${value:-$default}"
+  fi
+}
+
+require_token() {
+  if [[ -z ${TODOIST_API_TOKEN:-} ]]; then
+    err "Variável TODOIST_API_TOKEN não definida."
+    echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.zshrc.local" >&2
+    exit 1
+  fi
+}
+
+todoist_api() {
+  local method="$1" path="$2" data="${3:-}"
+  local -a args=(
+    -fsS
+    -X "$method"
+    "$API_BASE$path"
+    -H "Authorization: Bearer ${TODOIST_API_TOKEN}"
+    -H "Content-Type: application/json"
+  )
+  if [[ -n "$data" ]]; then
+    args+=(--data "$data")
+  fi
+  curl "${args[@]}"
+}
+
+get_projects_json() {
+  todoist_api GET "/projects"
+}
+
+get_tasks_json() {
+  local filter="${1:-}" limit="${2:-$DEFAULT_LIMIT}"
+  if [[ -n "$filter" ]]; then
+    curl -fsS -G "$API_BASE/tasks/filter" \
+      -H "Authorization: Bearer ${TODOIST_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data-urlencode "query=${filter}" \
+      --data-urlencode "limit=${limit}"
+  else
+    curl -fsS -G "$API_BASE/tasks" \
+      -H "Authorization: Bearer ${TODOIST_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data-urlencode "limit=${limit}"
+  fi
+}
+
+get_task_json() {
+  local task_id="$1"
+  todoist_api GET "/tasks/$task_id"
+}
+
+close_task() {
+  local task_id="$1"
+  todoist_api POST "/tasks/$task_id/close" >/dev/null
+}
+
+priority_num_to_label() {
+  case "$1" in
+    4) printf 'P1' ;;
+    3) printf 'P2' ;;
+    2) printf 'P3' ;;
+    1|0|"") printf 'P4' ;;
+    *) printf 'P%s' "$1" ;;
+  esac
+}
+
+projects_cache() {
+  if [[ -z ${_TODOIST_PROJECTS_JSON:-} ]]; then
+    _TODOIST_PROJECTS_JSON="$(get_projects_json)"
+  fi
+  printf '%s' "$_TODOIST_PROJECTS_JSON"
+}
+
+project_name_by_id() {
+  local project_id="$1"
+  PROJECTS_JSON="$(projects_cache)" PROJECT_ID="$project_id" python3 <<'PY'
+import json, os
+projects = json.loads(os.environ['PROJECTS_JSON'])
+project_id = os.environ['PROJECT_ID']
+if isinstance(projects, dict):
+    projects = projects.get('results', [])
+for p in projects:
+    if str(p.get('id')) == project_id:
+        print(p.get('name', project_id))
+        raise SystemExit(0)
+print(project_id)
+PY
+}
+
+project_rows() {
+  PROJECTS_JSON="$(projects_cache)" python3 <<'PY'
+import json, os
+projects = json.loads(os.environ['PROJECTS_JSON'])
+if isinstance(projects, dict):
+    projects = projects.get('results', [])
+for p in projects:
+    print(f"[{p.get('id','')}] {p.get('name','')}")
+PY
+}
+
+task_rows_from_json() {
+  local tasks_json="$1"
+  local projects_json="$2"
+  TASKS_JSON="$tasks_json" PROJECTS_JSON="$projects_json" python3 <<'PY'
+import json, os
+raw = json.loads(os.environ['TASKS_JSON'])
+projects_raw = json.loads(os.environ['PROJECTS_JSON'])
+tasks = raw if isinstance(raw, list) else raw.get('results', [])
+projects = projects_raw if isinstance(projects_raw, list) else projects_raw.get('results', [])
+project_map = {str(p.get('id')): p.get('name','') for p in projects}
+
+def priority_label(value):
+    return {4:'P1',3:'P2',2:'P3',1:'P4'}.get(value, f'P{value}')
+
+for task in tasks:
+    tid = task.get('id','')
+    content = ' '.join(str(task.get('content','')).split())
+    due = (task.get('due') or {}).get('string') or (task.get('due') or {}).get('date') or 'sem data'
+    project = project_map.get(str(task.get('project_id','')), str(task.get('project_id','')))
+    priority = priority_label(task.get('priority', 1))
+    labels = task.get('labels') or []
+    label_text = f" | labels:{','.join(labels)}" if labels else ''
+    print(f"[{tid}] {content} — {priority} | {due} | {project}{label_text}")
+PY
+}
+
+pick_task_from_json() {
+  local header="$1" tasks_json="$2" rows
+  rows="$(task_rows_from_json "$tasks_json" "$(projects_cache)")"
+  if [[ -z "$rows" ]]; then
+    warn "Sem tarefas."
+    pause
+    return 1
+  fi
+  mapfile -t options <<<"$rows"
+  choose "$header" "${options[@]}"
+}
+
+task_id_from_row() {
+  local row="$1"
+  [[ "$row" =~ ^\[([^]]+)\] ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+show_task_details() {
+  local task_id="$1" task_json
+  task_json="$(get_task_json "$task_id")"
+  TASK_JSON="$task_json" PROJECTS_JSON="$(projects_cache)" python3 <<'PY'
+import json, os
+raw = json.loads(os.environ['TASK_JSON'])
+projects_raw = json.loads(os.environ['PROJECTS_JSON'])
+projects = projects_raw if isinstance(projects_raw, list) else projects_raw.get('results', [])
+project_map = {str(p.get('id')): p.get('name','') for p in projects}
+task = raw.get('task', raw) if isinstance(raw, dict) else raw
+priority = {4:'P1',3:'P2',2:'P3',1:'P4'}.get(task.get('priority',1), str(task.get('priority','')))
+due = (task.get('due') or {}).get('string') or (task.get('due') or {}).get('date') or 'sem data'
+project = project_map.get(str(task.get('project_id','')), str(task.get('project_id','')))
+labels = ', '.join(task.get('labels') or []) or '—'
+print(task.get('content',''))
+print('=' * len(task.get('content','')))
+print(f"ID: {task.get('id','')}")
+print(f"Projeto: {project}")
+print(f"Prioridade: {priority}")
+print(f"Due: {due}")
+print(f"Labels: {labels}")
+desc = task.get('description') or ''
+if desc:
+    print("\nDescrição:\n")
+    print(desc)
+PY
+  pause
+}
+
+complete_task_flow() {
+  local task_id="$1" label="$2"
+  confirm "Concluir '$label'?" || return 0
+  close_task "$task_id"
+  info "Tarefa concluída."
+  pause
+}
+
+task_actions() {
+  local row="$1" task_id label action
+  task_id="$(task_id_from_row "$row")" || { err "Não consegui obter o ID da tarefa."; pause; return; }
+  label="$row"
+  while true; do
+    action="$(choose "Ação" "Ver detalhes" "Concluir" "Voltar")"
+    case "$action" in
+      "Ver detalhes") show_task_details "$task_id" ;;
+      "Concluir") complete_task_flow "$task_id" "$label"; return ;;
+      "Voltar") return ;;
+    esac
+  done
+}
+
+browse_filter() {
+  local title="$1" filter="$2" tasks_json row
+  tasks_json="$(get_tasks_json "$filter")"
+  row="$(pick_task_from_json "$title" "$tasks_json")" || return
+  task_actions "$row"
+}
+
+browse_project() {
+  local row project_id project_name tasks_json selected
+  mapfile -t projects < <(project_rows)
+  (( ${#projects[@]} > 0 )) || { warn "Sem projetos."; pause; return; }
+  row="$(choose "Projeto" "${projects[@]}")"
+  [[ "$row" =~ ^\[([^]]+)\]\ (.*)$ ]] || { err "Projeto inválido."; pause; return; }
+  project_id="${BASH_REMATCH[1]}"
+  project_name="${BASH_REMATCH[2]}"
+  tasks_json="$(get_tasks_json "" "200")"
+  selected="$(PROJECT_ID="$project_id" TASKS_JSON="$tasks_json" python3 <<'PY'
+import json, os
+project_id = os.environ['PROJECT_ID']
+raw = json.loads(os.environ['TASKS_JSON'])
+tasks = raw if isinstance(raw, list) else raw.get('results', [])
+sel = [t for t in tasks if str(t.get('project_id')) == project_id]
+print(json.dumps(sel, ensure_ascii=False))
+PY
+)"
+  local task_row
+  task_row="$(pick_task_from_json "Projeto: $project_name" "$selected")" || return
+  task_actions "$task_row"
+}
+
+add_task_flow() {
+  local title desc due priority project_row project_id result
+  title="$(input "Título" "")"
+  [[ -n "$title" ]] || { warn "Título vazio. Nada a fazer."; pause; return; }
+  desc="$(input "Descrição (opcional)" "")"
+  due="$(input "Due (opcional, ex: tomorrow / in 1 week)" "")"
+  priority="$(choose "Prioridade" "4 (normal)" "3" "2" "1 (alta)")"
+  priority="${priority%% *}"
+  mapfile -t projects < <(project_rows)
+  project_row="$(choose "Projeto" "(sem projeto / Inbox)" "${projects[@]}")"
+  project_id=""
+  if [[ "$project_row" != "(sem projeto / Inbox)" ]]; then
+    [[ "$project_row" =~ ^\[([^]]+)\] ]] && project_id="${BASH_REMATCH[1]}"
+  fi
+
+  local -a cmd=(todoist-add "$title")
+  [[ -n "$desc" ]] && cmd+=(--desc "$desc")
+  [[ -n "$due" ]] && cmd+=(--due "$due")
+  [[ -n "$project_id" ]] && cmd+=(--project "$project_id")
+  [[ -n "$priority" ]] && cmd+=(--priority "$priority")
+
+  echo
+  "${cmd[@]}"
+  pause
+}
+
+custom_filter_flow() {
+  local filter
+  filter="$(input "Filtro Todoist" "today | overdue")"
+  [[ -n "$filter" ]] || return
+  browse_filter "Filtro: $filter" "$filter"
+}
+
+main_menu() {
+  local choice
+  while true; do
+    clear
+    style "Todoist TUI"
+    echo
+    choice="$(choose "Escolhe uma vista" \
+      "Hoje" \
+      "Urgente" \
+      "Inbox" \
+      "Por projeto" \
+      "Filtro custom" \
+      "Adicionar tarefa" \
+      "Sair")"
+    case "$choice" in
+      "Hoje") browse_filter "Hoje" "today" ;;
+      "Urgente") browse_filter "Urgente" "overdue | today | p1" ;;
+      "Inbox") browse_filter "Inbox" "#Inbox" ;;
+      "Por projeto") browse_project ;;
+      "Filtro custom") custom_filter_flow ;;
+      "Adicionar tarefa") add_task_flow ;;
+      "Sair") break ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  todoist-tui
+
+Abre uma TUI simples para navegar e gerir tarefas da Todoist.
+
+Requer:
+  TODOIST_API_TOKEN
+EOF
+}
+
+if [[ ${1:-} == "-h" || ${1:-} == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+require_token
+main_menu

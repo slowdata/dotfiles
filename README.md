@@ -283,7 +283,7 @@ export TODOIST_API_TOKEN=...
 | `todoist-overdue` | Listar tarefas atrasadas                   |
 | `todoist-urgent`  | Listar tarefas urgentes (today/overdue/p1) |
 | `todoist-projects`| Listar projetos da Todoist                 |
-| `superlist-rich-add` | Criar tarefa rica no Superlist via email + MCP |
+| `todoist-tui`     | TUI simples para navegar e gerir tarefas   |
 
 ---
 
@@ -322,44 +322,18 @@ todoist-today
 todoist-overdue
 todoist-urgent
 todoist-projects
+todoist-tui
 ```
 
----
+### `todoist-tui`
 
-## Superlist helpers
-
-### `superlist-rich-add`
-
-Cria uma tarefa no Superlist com **título + corpo markdown** via email forwarding e,
-a seguir, usa o MCP para ajustar lista, due date, prioridade, labels e assignee.
-
-> Requer o comando `superlist` já instalado/configurado localmente.
-
-#### SMTP
-
-Exemplo com Fastmail:
-
-```bash
-export SUPERLIST_SMTP_HOST="smtp.fastmail.com"
-export SUPERLIST_SMTP_PORT="465"
-export SUPERLIST_SMTP_SECURE="true"
-export SUPERLIST_SMTP_USER="ricardo@sept.pt"
-export SUPERLIST_SMTP_PASS="APP_PASSWORD"
-export SUPERLIST_SMTP_FROM="ricardo@sept.pt"
-```
-
-#### Exemplo
-
-```bash
-superlist-rich-add \
-  --title "Atualizar dotfiles em ossoarchy e viarchy" \
-  --body-file /tmp/nota.md \
-  --list "PGR" \
-  --priority medium \
-  --label infra
-```
-
-Também suporta `--body` e `--stdin`.
+TUI simples em bash + gum, inspirada no `reunioes`, para:
+- ver Hoje / Urgente / Inbox
+- navegar por projeto
+- aplicar filtro custom
+- adicionar tarefa
+- concluir tarefa
+- ver detalhes
 
 ---
 
