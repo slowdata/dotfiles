@@ -5,7 +5,7 @@ API_BASE="https://api.todoist.com/api/v1"
 DEFAULT_LIMIT="100"
 
 has() { command -v "$1" >/dev/null 2>&1; }
-interactive_tty() { [[ -t 0 && -t 1 && -r /dev/tty && -w /dev/tty ]]; }
+interactive_tty() { [[ -r /dev/tty && -w /dev/tty ]]; }
 use_gum() { has gum && interactive_tty; }
 
 style() {
