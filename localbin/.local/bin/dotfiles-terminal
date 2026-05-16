@@ -119,7 +119,7 @@ launch_with_footclient() {
     esac
   done
 
-  local -a foot_args=(-N --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock")
+  local -a foot_args=(-N --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock" --term=foot)
   [[ -n "$dir" ]] && foot_args+=(--working-directory="$dir")
   [[ -n "$title" ]] && foot_args+=(--title="$title")
   [[ -n "$app_id" ]] && foot_args+=(--app-id="$app_id")
