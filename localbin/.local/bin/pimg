@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  pimg <image-file>
+  pimg --clipboard | -c
+
+Preview an image inline in Foot using Sixel via ImageMagick.
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+tmp=""
+cleanup() {
+  [[ -n "$tmp" && -f "$tmp" ]] && rm -f "$tmp"
+}
+trap cleanup EXIT
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  -c|--clipboard)
+    tmp="$(mktemp --suffix=.png)"
+    if ! wl-paste --type image/png >"$tmp" 2>/dev/null; then
+      echo "pimg: clipboard does not contain a PNG image" >&2
+      exit 1
+    fi
+    image="$tmp"
+    ;;
+  *)
+    image="$1"
+    ;;
+esac
+
+if [[ ! -f "$image" ]]; then
+  echo "pimg: file not found: $image" >&2
+  exit 1
+fi
+
+if ! command -v magick >/dev/null 2>&1; then
+  echo "pimg: ImageMagick 'magick' command not found" >&2
+  exit 1
+fi
+
+# Force TERM=foot so ImageMagick emits Sixel even if the user keeps a more
+# conservative TERM for compatibility.
+TERM=foot magick "$image" -auto-orient -resize '900x900>' sixel:-
+printf '\n'
