@@ -37,6 +37,8 @@ git@github.com:slowdata/dotfiles.git
 dotfiles/
 ├── ghostty/
 │   └── .config/ghostty/config      # Config do terminal principal
+├── foot/
+│   └── .config/foot/foot.ini       # Config do foot + shell integration
 ├── hypr-common/
 │   └── .config/hypr/               # Apenas overrides pessoais globais (ex: bindings)
 ├── hypr-ossoarchy/
@@ -53,6 +55,7 @@ dotfiles/
 │       └── skills/omarchy/         # Skill omarchy para o pi
 ├── localbin/
 │   └── .local/bin/
+│       ├── dotfiles-terminal       # Launcher terminal Hypr/Omarchy com fallback XDG
 │       └── todoist-add             # Helper CLI para criar tarefas via API Todoist
 ├── tmux/
 │   └── .config/tmux/tmux.conf     # Config tmux (uso secundário)
@@ -83,7 +86,7 @@ git clone git@github.com:slowdata/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 
 # 2. Aplicar com stow (cria symlinks em ~)
-stow ghostty ohmyposh tmux zsh pi localbin
+stow ghostty foot ohmyposh tmux zsh pi localbin
 
 # 2b. Hyprland / Omarchy
 stow hypr-common hypr-$(hostname)
@@ -170,10 +173,43 @@ Ou usar os comandos `omarchy-refresh-*` / `omarchy-refresh-config` quando apropr
 
 ---
 
-## Terminal: Ghostty (principal)
+## Terminal launcher: `dotfiles-terminal`
 
-Ghostty é o terminal primário. A ideia é usá-lo **em substituição do tmux** para uso
-diário, tirando partido dos splits nativos.
+O `Super+Enter` do Hyprland chama `dotfiles-terminal` em vez de hardcoding um
+terminal específico.
+
+Fluxo:
+- a preferência continua a ser gerida pelo Omarchy via `omarchy default terminal`
+- por baixo, esse comando escreve `~/.config/xdg-terminals.list`
+- se o terminal preferido for `foot.desktop`, o wrapper usa `footclient -N` com
+  o socket systemd (`$XDG_RUNTIME_DIR/foot.sock`) para arranque rápido
+- como o `foot --server` não recarrega `foot.ini`, o wrapper injeta as cores do
+  tema Omarchy actual como overrides em cada nova janela Foot
+- se mudares para outro terminal, o wrapper cai automaticamente para
+  `xdg-terminal-exec`
+
+Mudar terminal depois:
+
+```bash
+omarchy default terminal foot
+omarchy default terminal ghostty
+omarchy default terminal kitty
+omarchy default terminal alacritty
+```
+
+Para Foot em modo servidor, activar uma vez por máquina:
+
+```bash
+systemctl --user enable --now foot-server.socket
+```
+
+---
+
+## Terminal: Ghostty (alternativo)
+
+Ghostty continua configurado e pode voltar a ser o terminal preferido com
+`omarchy default terminal ghostty`. A ideia original era usá-lo **em substituição
+do tmux** para uso diário, tirando partido dos splits nativos.
 
 ### Filosofia actual
 

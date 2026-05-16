@@ -99,6 +99,44 @@ eval "$(mise activate zsh)"
 # Oh-my-posh
 eval "$(oh-my-posh init zsh --config ~/.config/ohmyposh/zen.omp.json)"
 
+# Foot shell integration (OSC 7 + OSC 133)
+# - Ctrl+Shift+N abre novo terminal no directório actual
+# - Ctrl+Shift+Z/X salta entre prompts no scrollback
+# - pipe-command-output consegue enviar o output do último comando
+if [[ -o interactive && -n "${FOOT_TERMINAL:-}" && -z "${_FOOT_ZSH_INTEGRATION_LOADED:-}" ]]; then
+  typeset -g _FOOT_ZSH_INTEGRATION_LOADED=1
+  autoload -Uz add-zsh-hook
+
+  _foot_osc7_cwd() {
+    emulate -L zsh
+    setopt extendedglob
+    local LC_ALL=C
+    local encoded_pwd="${PWD//(#m)([^@-Za-z&-;_~])/%${(l:2::0:)$(([##16]#MATCH))}}"
+    printf '\e]7;file://%s%s\e\\' "${HOST:-$(hostname)}" "$encoded_pwd"
+  }
+
+  _foot_prompt_mark() {
+    # End marker only after an actual command. Avoid a stray OSC 133;D on the
+    # first prompt of a new shell.
+    if [[ -n "${_FOOT_COMMAND_ACTIVE:-}" ]]; then
+      printf '\e]133;D\e\\'
+      unset _FOOT_COMMAND_ACTIVE
+    fi
+
+    _foot_osc7_cwd
+    printf '\e]133;A\e\\'
+  }
+
+  _foot_command_start() {
+    typeset -g _FOOT_COMMAND_ACTIVE=1
+    printf '\e]133;C\e\\'
+  }
+
+  add-zsh-hook chpwd _foot_osc7_cwd
+  add-zsh-hook precmd _foot_prompt_mark
+  add-zsh-hook preexec _foot_command_start
+fi
+
 # Evitar Ctrl+S congelar o terminal (para tmux leader)
 if [[ -o interactive ]]; then
   stty -ixon -ixoff 2>/dev/null
@@ -119,6 +157,36 @@ bindkey '^N' history-beginning-search-forward   # Ctrl+N → histórico abaixo (
 bindkey "\e[3~" delete-char          # Delete → apaga à direita
 bindkey "\e[1~" beginning-of-line    # Home
 bindkey "\e[4~" end-of-line          # End
+
+# Foot: evitar lixo no prompt se Ctrl(+Shift)+PageUp/PageDown for carregado.
+# Estes combos chegam ao Zsh como CSI modificados e não são atalhos fiáveis aqui.
+if [[ -o interactive && -n "${FOOT_TERMINAL:-}" ]]; then
+  _foot_zle_noop() { }
+  zle -N _foot_zle_noop
+  bindkey "\e[5;5~" _foot_zle_noop
+  bindkey "\e[6;5~" _foot_zle_noop
+  bindkey "\e[5;6~" _foot_zle_noop
+  bindkey "\e[6;6~" _foot_zle_noop
+fi
+
+# Normalizar pastes vindos de browser/TUI/terminal.
+# - CRLF (Windows/web) -> LF
+# - remove espaços/tabs no fim de cada linha; algumas TUIs copiam linhas
+#   preenchidas até à largura da janela, e esses espaços fazem wrap parecendo
+#   haver linhas vazias entre comandos.
+if [[ -o interactive ]]; then
+  _normalize_crlf_paste() {
+    local had_final_newline=
+    [[ "$PASTED" == *$'\n' ]] && had_final_newline=1
+
+    PASTED=${PASTED//$'\r'/}
+    PASTED="$(printf '%s' "$PASTED" | sed 's/[[:blank:]]*$//')"
+    [[ -n "$had_final_newline" ]] && PASTED+=$'\n'
+  }
+  autoload -Uz bracketed-paste-magic
+  zstyle ':bracketed-paste-magic' paste-finish _normalize_crlf_paste
+  zle -N bracketed-paste bracketed-paste-magic
+fi
 
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$PATH:$HOME/go/bin"

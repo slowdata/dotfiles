@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Launcher used by Hypr/Omarchy bindings.
+#
+# It keeps Omarchy/xdg-terminal-exec as the source of truth for the preferred
+# terminal (`omarchy default terminal ...` writes ~/.config/xdg-terminals.list),
+# but optimizes Foot by using footclient + socket activation when Foot is the
+# selected terminal. To switch away from Foot, run e.g.
+# `omarchy default terminal ghostty`; this wrapper will fall back to
+# xdg-terminal-exec automatically.
+
+selected_terminal() {
+  xdg-terminal-exec --print-id 2>/dev/null | cut -d: -f1 || true
+}
+
+launch_with_xdg_terminal_exec() {
+  exec xdg-terminal-exec "$@"
+}
+
+start_foot_socket() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl --user --quiet is-active foot-server.socket 2>/dev/null && return 0
+  systemctl --user start foot-server.socket >/dev/null 2>&1
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+add_current_omarchy_foot_theme_overrides() {
+  # foot --server does not reload foot.ini after Omarchy changes themes.
+  # Passing the current Omarchy theme as per-window overrides makes new
+  # footclient windows match the active theme without restarting the server
+  # (which would close all Foot windows).
+  local theme_file="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/current/theme/foot.ini"
+  local section=""
+  local line key value
+
+  [[ -r "$theme_file" ]] || return 0
+
+  foot_args+=(--override=initial-color-theme=dark)
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="$(trim "$line")"
+
+    [[ -z "$line" || "$line" == \#* ]] && continue
+
+    if [[ "$line" =~ ^\[(.*)\]$ ]]; then
+      section="${BASH_REMATCH[1]}"
+      continue
+    fi
+
+    [[ "$section" == "colors-dark" || "$section" == "colors-light" ]] || continue
+    [[ "$line" == *=* ]] || continue
+
+    key="$(trim "${line%%=*}")"
+    value="$(trim "${line#*=}")"
+
+    [[ -n "$key" && -n "$value" ]] || continue
+    foot_args+=(--override="${section}.${key}=${value}")
+  done <"$theme_file"
+}
+
+launch_with_footclient() {
+  local dir=""
+  local title=""
+  local app_id=""
+  local hold=""
+  local -a cmd=()
+
+  while (($#)); do
+    case "$1" in
+      --dir=*)
+        dir="${1#--dir=}"
+        shift
+        ;;
+      --dir|--working-directory|-D)
+        dir="${2:-}"
+        shift 2
+        ;;
+      --working-directory=*)
+        dir="${1#--working-directory=}"
+        shift
+        ;;
+      --title=*)
+        title="${1#--title=}"
+        shift
+        ;;
+      --title|-T)
+        title="${2:-}"
+        shift 2
+        ;;
+      --app-id=*)
+        app_id="${1#--app-id=}"
+        shift
+        ;;
+      --app-id|-a)
+        app_id="${2:-}"
+        shift 2
+        ;;
+      --hold|-H)
+        hold=1
+        shift
+        ;;
+      --)
+        shift
+        cmd=("$@")
+        break
+        ;;
+      *)
+        cmd=("$@")
+        break
+        ;;
+    esac
+  done
+
+  local -a foot_args=(-N --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock")
+  [[ -n "$dir" ]] && foot_args+=(--working-directory="$dir")
+  [[ -n "$title" ]] && foot_args+=(--title="$title")
+  [[ -n "$app_id" ]] && foot_args+=(--app-id="$app_id")
+  [[ -n "$hold" ]] && foot_args+=(--hold)
+  add_current_omarchy_foot_theme_overrides
+
+  if command -v footclient >/dev/null 2>&1 && start_foot_socket; then
+    if ((${#cmd[@]})); then
+      footclient "${foot_args[@]}" -- "${cmd[@]}" && return 0
+    else
+      footclient "${foot_args[@]}" && return 0
+    fi
+  fi
+
+  # If footclient/socket activation is unavailable, still open a terminal.
+  if command -v foot >/dev/null 2>&1; then
+    local -a foot_fallback=()
+    [[ -n "$dir" ]] && foot_fallback+=(--working-directory="$dir")
+    [[ -n "$title" ]] && foot_fallback+=(--title="$title")
+    [[ -n "$app_id" ]] && foot_fallback+=(--app-id="$app_id")
+    [[ -n "$hold" ]] && foot_fallback+=(--hold)
+
+    if ((${#cmd[@]})); then
+      exec foot "${foot_fallback[@]}" -- "${cmd[@]}"
+    else
+      exec foot "${foot_fallback[@]}"
+    fi
+  fi
+
+  return 1
+}
+
+case "$(selected_terminal)" in
+  foot.desktop|footclient.desktop|org.codeberg.dnkl.foot.desktop)
+    launch_with_footclient "$@"
+    ;;
+  *)
+    launch_with_xdg_terminal_exec "$@"
+    ;;
+esac
