@@ -27,7 +27,12 @@ claude/.claude/telemetry/
 claude/.claude/todos/
 
 # Pi agent runtime/state/secrets — não versionar
+# settings.json é local por máquina; nunca versionar nem symlinkar para si próprio
 pi/.pi/agent/auth.json
 pi/.pi/agent/settings.json
+pi/.pi/agent/settings.json.bak.*
 pi/.pi/agent/sessions/
-pi/.pi/agent/settings.json
+pi/.pi/agent/web-search-stats.json
+pi/.pi/agent/extensions/*.bak.*
+pi/.pi/agent/themes/*.bak.*
+pi/.pi/agent/skills/caveman*
