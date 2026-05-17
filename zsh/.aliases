@@ -104,23 +104,6 @@ sail() {
 alias sync-now='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -auto -batch -prefer newer && unison obsidian && echo "Sync completo!"'
 alias sync-check='unison /home/dias/Sync/Logseq /home/dias/Dropbox/Logseq -batch && unison /home/dias/Sync/Obsidian /home/dias/Dropbox/Obsidian -batch'
 
-# Atalho para criar/entrar em sessões tmux
-# Uso: t [nome]  →  sem nome abre/retoma sessão "main"
-unalias t 2>/dev/null
-t() {
-  local name
-  if [[ "$1" == "." ]]; then
-    name="$(basename "$PWD")"
-  else
-    name="${1:-main}"
-  fi
-  if [ -n "$TMUX" ]; then
-    tmux switch-client -t "$name" 2>/dev/null || tmux new-session -d -s "$name" \; switch-client -t "$name"
-  else
-    tmux attach -t "$name" 2>/dev/null || tmux new -s "$name"
-  fi
-}
-
 # Selector de sessões sesh (Alt+S)
 function sesh-sessions() {
   {

@@ -143,10 +143,12 @@ if [[ -o interactive ]]; then
 fi
 
 # Selector de sessões sesh (Alt+S) — função definida em ~/.aliases
-zle -N sesh-sessions
-bindkey -M emacs '\es' sesh-sessions
-bindkey -M vicmd '\es' sesh-sessions
-bindkey -M viins '\es' sesh-sessions
+if command -v sesh >/dev/null 2>&1; then
+  zle -N sesh-sessions
+  bindkey -M emacs '\es' sesh-sessions
+  bindkey -M vicmd '\es' sesh-sessions
+  bindkey -M viins '\es' sesh-sessions
+fi
 
 # Keybindings clássicos (emacs style)
 bindkey -e
