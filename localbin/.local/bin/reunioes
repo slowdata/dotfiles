@@ -9,7 +9,7 @@ OPUS_BITRATE="${OPUS_BITRATE:-48k}"
 KEEP_WAV_DAYS="${KEEP_WAV_DAYS:-14}"
 
 has() { command -v "$1" >/dev/null 2>&1; }
-use_gum() { has gum && [[ -t 0 && -t 1 ]]; }
+use_gum() { has gum && [[ -t 0 && -t 1 ]] && ( : </dev/tty ) 2>/dev/null; }
 
 style() {
   if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi
@@ -21,9 +21,9 @@ err() { printf '❌ %s\n' "$*" >&2; }
 
 pause() {
   echo
-  if [[ -r /dev/tty ]]; then
+  if ( : </dev/tty ) 2>/dev/null; then
     read -rp "Enter para continuar..." _ </dev/tty || true
-  else
+  elif [[ -t 0 ]]; then
     read -rp "Enter para continuar..." _ || true
   fi
 }
@@ -33,7 +33,7 @@ confirm() {
   if use_gum; then
     gum confirm "$prompt" </dev/tty >/dev/tty
   else
-    if [[ -r /dev/tty ]]; then
+    if ( : </dev/tty ) 2>/dev/null; then
       read -rp "$prompt [y/N] " answer </dev/tty
     else
       read -rp "$prompt [y/N] " answer
@@ -62,7 +62,7 @@ input() {
   if use_gum; then
     gum input --prompt "$prompt " --value "$default" </dev/tty
   else
-    if [[ -r /dev/tty ]]; then
+    if ( : </dev/tty ) 2>/dev/null; then
       read -rp "$prompt [$default] " value </dev/tty
     else
       read -rp "$prompt [$default] " value
@@ -243,7 +243,15 @@ cleanup_candidates() {
 
 cleanup_wavs() {
   local days
-  days="$(input "Apagar WAV com mais de N dias" "$KEEP_WAV_DAYS")"
+  if [[ ! "$KEEP_WAV_DAYS" =~ ^[0-9]+$ ]]; then
+    warn "KEEP_WAV_DAYS inválido ('$KEEP_WAV_DAYS'); a usar 14."
+    KEEP_WAV_DAYS=14
+  fi
+  days="$(input "Apagar WAV com mais de quantos dias? (número)" "$KEEP_WAV_DAYS")"
+  if [[ ! "$days" =~ ^[0-9]+$ ]]; then
+    warn "Valor inválido: '$days'. Indica um número de dias, por exemplo: 14."
+    pause; return
+  fi
   KEEP_WAV_DAYS="$days"
   mapfile -t files < <(cleanup_candidates)
   if (( ${#files[@]} == 0 )); then
@@ -262,10 +270,75 @@ cleanup_wavs() {
 }
 
 record_meeting() {
-  info "Vou chamar: gravar-reuniao"
-  info "A gravação fica em: $REUNIOES_DIR"
+  local timestamp audio_file monitor mic ffmpeg_pid ffmpeg_status
+  local recording_stopped=false
+
+  timestamp=$(date +%Y-%m-%d_%H%M)
+  mkdir -p "$REUNIOES_DIR"
+  audio_file="$REUNIOES_DIR/reuniao_${timestamp}.wav"
+
+  local mic_gain="${MIC_GAIN:-1.20}"
+  local monitor_gain="${MONITOR_GAIN:-0.92}"
+  local output_rate="${OUTPUT_RATE:-24000}"
+  local mic_filter="${MIC_FILTER:-highpass=f=80,lowpass=f=9000,afftdn=nf=-20,acompressor=threshold=0.09:ratio=3:attack=5:release=90:makeup=3,alimiter=limit=0.92}"
+
+  style "🎙 A gravar reunião"
+  echo "Ficheiro: $audio_file"
   echo
-  gravar-reuniao
+
+  monitor="$(pactl get-default-sink).monitor"
+  mic="$(pactl get-default-source)"
+
+  echo "Monitor : $monitor"
+  echo "Microfone: $mic"
+  echo
+  echo "Antes de gravar, confirma:"
+  echo "✅ Estás a ouvir a reunião pelo dispositivo correto?"
+  echo "✅ O microfone está ligado?"
+  echo
+
+  if ( : </dev/tty ) 2>/dev/null; then
+    read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ </dev/tty || return
+  else
+    read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ || return
+  fi
+  echo
+
+  stop_recording() {
+    recording_stopped=true
+    echo
+    echo "⏹  A parar gravação..."
+    [[ -n "${ffmpeg_pid:-}" ]] && kill "$ffmpeg_pid" 2>/dev/null || true
+  }
+
+  trap stop_recording INT
+
+  ffmpeg -f pulse -i "$monitor" -f pulse -i "$mic" \
+    -filter_complex "[0:a]aformat=channel_layouts=mono,volume=${monitor_gain}[mon];[1:a]aformat=channel_layouts=mono,${mic_filter},volume=${mic_gain}[mic];[mon][mic]amix=inputs=2:duration=longest:normalize=0[mix];[mix]alimiter=limit=0.95[out]" \
+    -map "[out]" -ar "$output_rate" -c:a pcm_s16le "$audio_file" 2>/dev/null &
+  ffmpeg_pid=$!
+
+  set +e
+  wait "$ffmpeg_pid"
+  ffmpeg_status=$?
+  set -e
+  trap - INT
+
+  if [[ $ffmpeg_status -ne 0 && $recording_stopped != true ]]; then
+    err "A gravação terminou de forma inesperada."
+    return "$ffmpeg_status"
+  fi
+
+  echo
+  echo "✅ Gravação terminada"
+  echo "   WAV: $audio_file"
+  echo
+  echo "Para transcrever depois pelo TUI:"
+  echo "  reunioes transcrever"
+  echo
+  echo "Comando direto avançado:"
+  printf '  PT: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt transcrever-reuniao %q\n' "$audio_file"
+  printf '  EN: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=en transcrever-reuniao %q\n' "$audio_file"
   pause
 }
 
@@ -280,7 +353,7 @@ show_help() {
 Workflow recomendado
 
 1. reunioes → Gravar nova reunião
-   - chama gravar-reuniao
+   - grava diretamente dentro do TUI
    - cria WAV em ~/Sync/Reunioes
 
 2. reunioes → Transcrever áudio pendente
