@@ -137,7 +137,7 @@ if [[ -o interactive && -n "${FOOT_TERMINAL:-}" && -z "${_FOOT_ZSH_INTEGRATION_L
   add-zsh-hook preexec _foot_command_start
 fi
 
-# Evitar Ctrl+S congelar o terminal (para tmux leader)
+# Evitar Ctrl+S congelar o terminal se for usado em atalhos/sessões antigas.
 if [[ -o interactive ]]; then
   stty -ixon -ixoff 2>/dev/null
 fi

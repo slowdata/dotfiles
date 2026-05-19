@@ -238,15 +238,18 @@ Para sessões que precisem mesmo de persistência → usar tmux.
 Usado quando a persistência é crítica, principalmente:
 - **Sessões SSH** em servidores remotos
 - Tasks longas em background
-- Quando se quer a barra de status Catppuccin com informação de sessão
+- Quando se quer persistência para sessões/projetos
 
 ### Config relevante
 
-- **Prefix:** `Ctrl+S`
-- **Splits:** `prefix + |` (vertical) · `prefix + -` (horizontal)
-- **Navegação panes:** `prefix + h/j/k/l`
-- **Tema:** Catppuccin (via plugin `catppuccin/tmux`)
+- **Base:** defaults do Omarchy, com overrides mínimos do Dias
+- **Prefix:** `Ctrl+Space`
+- **Prefix secundário:** desativado (`prefix2 None`) para `Ctrl+B` não interferir
+- **Splits:** `prefix + h` (vertical) · `prefix + v` (horizontal)
+- **Navegação panes:** `Ctrl+Alt+setas`
+- **Tema:** Omarchy dinâmico via `tmux-omarchy-theme`
 - **Gestor de sessões:** `sesh` com selector fzf (`Alt+S` no zsh)
+- **Verificação:** `dotfiles-tmux-doctor`
 
 ### Função rápida `t`
 
@@ -307,7 +310,7 @@ export TODOIST_API_TOKEN=...
 | `fzf`        | Fuzzy finder                               |
 | `zoxide`     | cd inteligente                             |
 | `mise`       | Gestão de versões (node, ruby, php…)       |
-| `sesh`       | Gestor de sessões tmux com fzf             |
+| `sesh`       | Gestor de sessões tmux com fzf (`yay -S sesh-bin`) |
 | `bat`        | cat com syntax highlight (tema: ansi)      |
 | `unison`     | Sync bidirecional Sync↔Dropbox             |
 | `typora`     | Editor Markdown visual                     |

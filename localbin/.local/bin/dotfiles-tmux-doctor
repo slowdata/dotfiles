@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+conf="${1:-$HOME/.config/tmux/tmux.conf}"
+failed=0
+
+check() {
+  local label="$1" pattern="$2"
+  if grep -qxF "$pattern" "$conf"; then
+    printf '✅ %s\n' "$label"
+  else
+    printf '❌ %s\n   esperado: %s\n' "$label" "$pattern"
+    failed=1
+  fi
+}
+
+printf 'tmux config: %s\n\n' "$conf"
+
+[[ -f "$conf" ]] || { echo "❌ tmux.conf não existe"; exit 1; }
+
+check 'prefix Omarchy' 'set -g prefix C-Space'
+check 'C-b não é prefix secundário' 'set -g prefix2 None'
+check 'split vertical Omarchy' 'bind h split-window -v -c "#{pane_current_path}"'
+check 'split horizontal Omarchy' 'bind v split-window -h -c "#{pane_current_path}"'
+check 'kill pane Omarchy' 'bind x kill-pane'
+check 'tema dinâmico Omarchy' 'source-file -q ~/.config/tmux/omarchy-theme.conf'
+
+if command -v sesh >/dev/null 2>&1; then
+  printf '✅ sesh instalado: %s\n' "$(command -v sesh)"
+else
+  printf '⚠️  sesh não instalado. Instala com: yay -S sesh-bin\n'
+fi
+
+if command -v tmux >/dev/null 2>&1; then
+  if tmux -f "$conf" start-server \; source-file "$conf" >/dev/null 2>&1; then
+    printf '✅ tmux carrega config sem erro\n'
+  else
+    printf '❌ tmux não conseguiu carregar config\n'
+    failed=1
+  fi
+fi
+
+exit "$failed"
