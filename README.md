@@ -242,21 +242,22 @@ Usado quando a persistência é crítica, principalmente:
 
 ### Config relevante
 
-- **Base:** defaults do Omarchy, com overrides mínimos do Dias
-- **Prefix:** `Ctrl+Space`
+- **Config tmux:** workflow pessoal do Dias, não substituir pelo default Omarchy
+- **Prefix:** `Ctrl+S`
 - **Prefix secundário:** desativado (`prefix2 None`) para `Ctrl+B` não interferir
-- **Splits:** `prefix + h` (vertical) · `prefix + v` (horizontal)
-- **Navegação panes:** `Ctrl+Alt+setas`
+- **Reload:** `Ctrl+Q` global ou `prefix + q`
+- **Splits:** `prefix + |` (horizontal) · `prefix + -` (vertical)
+- **Navegação panes:** `prefix + h/j/k/l` ou `Ctrl+Alt+setas`
 - **Tema:** Omarchy dinâmico via `tmux-omarchy-theme`
+- **Aliases:** `t`/`tmux` ficam nos defaults do Omarchy; não redefinir nos dotfiles
 - **Gestor de sessões:** `sesh` com selector fzf (`Alt+S` no zsh)
 - **Verificação:** `dotfiles-tmux-doctor`
 
 ### Função rápida `t`
 
 ```bash
-t           # abre/retoma sessão "main"
-t nome      # abre/retoma sessão com nome
-t .         # usa o nome da pasta actual como sessão
+t           # alias default do Omarchy: tmux attach || tmux new -s Work
+Alt+S       # selector sesh/fzf, se `sesh` estiver instalado
 ```
 
 ---
