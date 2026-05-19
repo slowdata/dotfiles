@@ -217,7 +217,7 @@ Scripts globais devem viver em:
 ```
 
 Exemplos atuais:
-- `gravar-reuniao`
+- `reunioes` — TUI para gravar/transcrever/arquivar reuniões
 - `transcrever-reuniao`
 - `dotfiles-stow-hypr`
 - scripts Todoist
@@ -226,8 +226,10 @@ Exemplos atuais:
 Fazer backup e trocar por symlink do repo:
 
 ```bash
-mv ~/.local/bin/gravar-reuniao ~/.local/bin/gravar-reuniao.bak 2>/dev/null || true
 mv ~/.local/bin/transcrever-reuniao ~/.local/bin/transcrever-reuniao.bak 2>/dev/null || true
+
+# Removido: a gravação passou a viver no TUI `reunioes`
+rm -f ~/.local/bin/gravar-reuniao
 
 cd ~/dotfiles
 stow localbin
@@ -235,7 +237,8 @@ stow localbin
 
 ### Verificar
 ```bash
-ls -l ~/.local/bin/gravar-reuniao ~/.local/bin/transcrever-reuniao
+ls -l ~/.local/bin/reunioes ~/.local/bin/transcrever-reuniao
+command -v gravar-reuniao || echo "gravar-reuniao removido"
 ```
 
 ---
@@ -356,7 +359,8 @@ git -C ~/dotfiles status --short
 
 ### Scripts em symlink
 ```bash
-ls -l ~/.local/bin/gravar-reuniao ~/.local/bin/transcrever-reuniao
+ls -l ~/.local/bin/reunioes ~/.local/bin/transcrever-reuniao
+command -v gravar-reuniao || echo "gravar-reuniao removido"
 ```
 
 ### Hypr no estado esperado
