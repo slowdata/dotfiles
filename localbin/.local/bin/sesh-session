@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v sesh >/dev/null 2>&1; then
+  echo "sesh não está instalado. Instala com: yay -S sesh-bin" >&2
+  read -r -p "Enter para fechar..." _ 2>/dev/null || true
+  exit 127
+fi
+
+if ! command -v fzf >/dev/null 2>&1; then
+  echo "fzf não está instalado." >&2
+  read -r -p "Enter para fechar..." _ 2>/dev/null || true
+  exit 127
+fi
+
+session="$(sesh list -t -c | fzf --height "${SESH_FZF_HEIGHT:-100%}" --reverse --border-label ' sesh ' --border --prompt '⚡  ')" || exit 0
+[[ -n "$session" ]] || exit 0
+
+exec sesh connect "$session"

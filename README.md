@@ -248,16 +248,19 @@ Usado quando a persistência é crítica, principalmente:
 - **Reload:** `Ctrl+Q` global ou `prefix + q`
 - **Splits:** `prefix + |` (horizontal) · `prefix + -` (vertical)
 - **Navegação panes:** `prefix + h/j/k/l` ou `Ctrl+Alt+setas`
+- **Sessões:** `detach-on-destroy off` para não sair do tmux ao fechar sessão
 - **Tema:** Omarchy dinâmico via `tmux-omarchy-theme`
 - **Aliases:** `t`/`tmux` ficam nos defaults do Omarchy; não redefinir nos dotfiles
-- **Gestor de sessões:** `sesh` com selector fzf (`Alt+S` no zsh)
+- **Gestor de sessões:** `sesh` com selector fzf (`Alt+S` no zsh ou `prefix + S` no tmux)
 - **Verificação:** `dotfiles-tmux-doctor`
 
 ### Função rápida `t`
 
 ```bash
 t           # alias default do Omarchy: tmux attach || tmux new -s Work
-Alt+S       # selector sesh/fzf, se `sesh` estiver instalado
+Alt+S       # selector sesh/fzf no zsh, se `sesh` estiver instalado
+prefix + S  # selector sesh/fzf dentro do tmux
+Win+Shift+Enter # selector sesh/fzf em novo terminal
 ```
 
 ---

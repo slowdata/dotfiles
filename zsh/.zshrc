@@ -27,6 +27,7 @@ zinit snippet OMZP::sudo
 zinit snippet OMZP::command-not-found
 
 # Load completions
+fpath=("$HOME/.local/share/zsh/site-functions" $fpath)
 autoload -U compinit && compinit
 
 zinit cdreplay -q
