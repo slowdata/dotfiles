@@ -46,6 +46,7 @@ Antes de alterar uma máquina, distingue sempre:
 - `ghostty/`
 - `ohmyposh/`
 - `localbin/`
+- `nvim/`
 - `pi/`
 - `hypr-common/`
 
@@ -96,7 +97,7 @@ git push
 ```bash
 cd ~/dotfiles
 git pull
-stow tmux zsh localbin
+stow tmux zsh localbin nvim
 ```
 
 Se a alteração incluir Hyprland comum:
@@ -325,7 +326,7 @@ omarchy theme set "$(omarchy theme current)"
 ```bash
 cd ~/dotfiles
 git pull
-stow tmux zsh localbin
+stow tmux zsh localbin nvim
 dotfiles-stow-hypr
 ```
 
@@ -333,7 +334,7 @@ dotfiles-stow-hypr
 ```bash
 cd ~/dotfiles
 git pull
-stow tmux zsh localbin
+stow tmux zsh localbin nvim
 dotfiles-stow-hypr
 ```
 
@@ -341,7 +342,7 @@ dotfiles-stow-hypr
 ```bash
 cd ~/dotfiles
 git pull
-stow tmux zsh localbin
+stow tmux zsh localbin nvim
 dotfiles-stow-hypr
 ```
 

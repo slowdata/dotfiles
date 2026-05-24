@@ -49,6 +49,8 @@ dotfiles/
 │   └── .config/hypr/               # Overrides específicos do omarchy-pgr
 ├── ohmyposh/
 │   └── .config/ohmyposh/           # Tema zen do oh-my-posh
+├── nvim/
+│   └── .config/nvim/plugin/after/  # Overrides pessoais para LazyVim/Omarchy
 ├── pi/
 │   └── .pi/agent/
 │       ├── AGENTS.md               # Contexto global (máquinas, SSH, etc.)
@@ -86,7 +88,7 @@ git clone git@github.com:slowdata/dotfiles.git ~/dotfiles
 cd ~/dotfiles
 
 # 2. Aplicar com stow (cria symlinks em ~)
-stow ghostty foot ohmyposh tmux zsh pi localbin
+stow ghostty foot ohmyposh nvim tmux zsh pi localbin
 
 # 2b. Hyprland / Omarchy
 stow hypr-common hypr-$(hostname)
