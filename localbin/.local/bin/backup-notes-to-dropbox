@@ -18,7 +18,8 @@ Notas:
   - Dropbox é apenas destino/backup.
   - Usa rsync com --delete para manter o destino espelhado.
   - Usa --checksum para evitar copiar ficheiros cujo conteúdo é igual mas mtime difere.
-  - Exclui .stfolder/ para não copiar marcador interno do Syncthing.
+  - Exclui .stfolder/ e .stversions/ para não copiar metadados/histórico do Syncthing.
+  - Exclui media bruto grande: *.wav, *.mp4, *.wmv, *.m4a.
 EOF
 }
 
@@ -61,6 +62,11 @@ RSYNC_OPTS=(
   --stats
   --checksum
   --exclude='.stfolder/'
+  --exclude='.stversions/'
+  --exclude='*.wav'
+  --exclude='*.mp4'
+  --exclude='*.wmv'
+  --exclude='*.m4a'
 )
 
 if [[ "$DRY_RUN" == true ]]; then
