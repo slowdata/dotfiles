@@ -504,7 +504,6 @@ record_meeting() {
   audio_file="$local_audio_file"
   local mic_gain="${MIC_GAIN:-1.20}" monitor_gain="${MONITOR_GAIN:-0.92}" output_rate="${OUTPUT_RATE:-24000}"
   local mic_filter="${MIC_FILTER:-highpass=f=80,lowpass=f=9000,afftdn=nf=-20,acompressor=threshold=0.09:ratio=3:attack=5:release=90:makeup=3,alimiter=limit=0.92}"
-  style "🎙 A gravar reunião"; echo "Ficheiro temporário local: $local_audio_file"; echo "Destino final Sync: $final_audio_file"; echo
   monitor="$(pactl get-default-sink 2>/dev/null || true)"
   mic="$(pactl get-default-source 2>/dev/null || true)"
   if [[ -z "$monitor" || -z "$mic" ]]; then
@@ -512,21 +511,86 @@ record_meeting() {
     return 1
   fi
   monitor="${monitor}.monitor"
-  echo "Monitor : $monitor"; echo "Microfone: $mic"; echo "Log ffmpeg: $ffmpeg_log"; echo
+
+  clear || true
+  style "🟡 PREPARAÇÃO DA GRAVAÇÃO"
+  cat <<EOF
+
+ESTADO: AINDA NÃO ESTÁ A GRAVAR
+
+Vai gravar para ficheiro local temporário:
+  $local_audio_file
+
+Só no fim, depois de parar e validar, será publicado para Syncthing:
+  $final_audio_file
+
+Fontes de áudio:
+  Sistema/reunião : $monitor
+  Microfone       : $mic
+
+Log técnico:
+  $ffmpeg_log
+
+Checklist antes de começar:
+  1. Estás a ouvir a reunião pelo dispositivo correto.
+  2. O microfone certo está seleccionado, se precisares da tua voz.
+  3. Quando carregares ENTER abaixo, a gravação começa IMEDIATAMENTE.
+
+Para cancelar agora: Ctrl+C
+EOF
+  echo
   if [[ "$mic" == "$monitor" ]]; then
     warn "O microfone predefinido é igual ao monitor de saída. Vais gravar áudio do sistema, mas provavelmente NÃO a tua voz por microfone separado."
     confirm "Continuar mesmo assim?" || { warn "Gravação cancelada. Define o microfone correcto no sistema e tenta novamente."; return 0; }
     echo
   fi
-  echo "✅ Confirma que estás a ouvir a reunião pelo dispositivo correto e que o microfone está ligado."; echo
-  if ( : </dev/tty ) 2>/dev/null; then read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ </dev/tty || return
-  else read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ || return; fi
-  stop_recording() { recording_stopped=true; echo; echo "⏹  A parar gravação..."; [[ -n "${ffmpeg_pid:-}" ]] && kill -INT "$ffmpeg_pid" 2>/dev/null || true; }
+  if ( : </dev/tty ) 2>/dev/null; then read -rp "ENTER = COMEÇAR A GRAVAR AGORA... " _ </dev/tty || return
+  else read -rp "ENTER = COMEÇAR A GRAVAR AGORA... " _ || return; fi
+
+  stop_recording() {
+    [[ "$recording_stopped" == true ]] && return 0
+    recording_stopped=true
+    printf '\n⏹  A parar gravação e a fechar WAV...\n'
+    [[ -n "${ffmpeg_pid:-}" ]] && kill -INT "$ffmpeg_pid" 2>/dev/null || true
+  }
   trap stop_recording INT
+
   ffmpeg -f pulse -i "$monitor" -f pulse -i "$mic" \
     -filter_complex "[0:a]aformat=channel_layouts=mono,volume=${monitor_gain}[mon];[1:a]aformat=channel_layouts=mono,${mic_filter},volume=${mic_gain}[mic];[mon][mic]amix=inputs=2:duration=longest:normalize=0[mix];[mix]alimiter=limit=0.95[out]" \
     -map "[out]" -ar "$output_rate" -c:a pcm_s16le "$audio_file" >"$ffmpeg_log" 2>&1 &
   ffmpeg_pid=$!
+
+  sleep 1
+  if ! kill -0 "$ffmpeg_pid" 2>/dev/null; then
+    set +e; wait "$ffmpeg_pid"; ffmpeg_status=$?; set -e; trap - INT
+    err "A gravação falhou ao arrancar. Ver log: $ffmpeg_log"
+    tail -40 "$ffmpeg_log" 2>/dev/null || true
+    return "${ffmpeg_status:-1}"
+  fi
+
+  printf '\a'
+  echo
+  style "🔴 GRAVAÇÃO INICIADA"
+  echo "A partir deste momento ESTÁ MESMO A GRAVAR."
+  echo "Prima ENTER para PARAR, fechar o WAV e correr a verificação de qualidade."
+  echo
+
+  local start_epoch now elapsed h m s
+  start_epoch="$(date +%s)"
+  while kill -0 "$ffmpeg_pid" 2>/dev/null; do
+    now="$(date +%s)"
+    elapsed=$((now - start_epoch))
+    h=$((elapsed / 3600)); m=$(((elapsed % 3600) / 60)); s=$((elapsed % 60))
+    printf '\r\033[K🔴 A GRAVAR há %02d:%02d:%02d  |  ENTER = PARAR  |  ficheiro local: %s' "$h" "$m" "$s" "$(basename "$local_audio_file")"
+    if ( : </dev/tty ) 2>/dev/null; then
+      if read -r -t 1 _ </dev/tty; then stop_recording; break; fi
+    else
+      if read -r -t 1 _; then stop_recording; break; fi
+    fi
+    [[ "$recording_stopped" == true ]] && break
+  done
+  printf '\r\033[K'
+
   set +e; wait "$ffmpeg_pid"; ffmpeg_status=$?; set -e; trap - INT
   if [[ $ffmpeg_status -ne 0 && $recording_stopped != true ]]; then err "A gravação terminou de forma inesperada. Ver log: $ffmpeg_log"; return "$ffmpeg_status"; fi
   if [[ ! -s "$local_audio_file" ]]; then err "WAV local vazio/inexistente: $local_audio_file"; return 1; fi
