@@ -33,7 +33,14 @@ ARCHIVE_INDEX="${ARCHIVE_INDEX:-$REUNIOES_DIR/.arquivo-audio.tsv}"
 has() { command -v "$1" >/dev/null 2>&1; }
 use_gum() { has gum && [[ -t 0 && -t 1 ]] && ( : </dev/tty ) 2>/dev/null; }
 
-style() { if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi; }
+# Cabeçalho em caixa. Cores herdadas do tema Omarchy via vars GUM_* / BORDER_FOREGROUND.
+style() {
+  if use_gum; then
+    gum style --border rounded --padding "0 2" --margin "0 0 1 0" --bold "$@"
+  else
+    printf '== %s ==\n' "$*"
+  fi
+}
 info() { printf 'ℹ️  %s\n' "$*"; }
 warn() { printf '⚠️  %s\n' "$*"; }
 err() { printf '❌ %s\n' "$*" >&2; }
@@ -312,15 +319,21 @@ meeting_rows() {
 
 show_status() {
   init_project_dirs
-  style "Reuniões — estado"
-  echo "Projeto: $REUNIOES_DIR"
-  echo "Transcrições: $TRANSCRICOES_DIR"
-  echo "Áudio WAV publicado: $WAV_DIR"
-  echo "Áudio WAV local/pendente: $LOCAL_WAV_DIR"
-  echo "Áudio OPUS: $OPUS_DIR"
+  style "🎙 Reuniões — estado"
+  {
+    printf 'Projeto\t%s\n' "$REUNIOES_DIR"
+    printf 'Transcrições\t%s\n' "$TRANSCRICOES_DIR"
+    printf 'WAV publicado\t%s\n' "$WAV_DIR"
+    printf 'WAV local/pendente\t%s\n' "$LOCAL_WAV_DIR"
+    printf 'OPUS\t%s\n' "$OPUS_DIR"
+  } | column -t -s $'\t'
   echo
-  if use_gum; then meeting_rows | gum table --separator $'\t' --height 25 --print
-  else meeting_rows | column -t -s $'\t'; fi
+  if use_gum; then
+    meeting_rows | gum table --separator $'\t' --height 25 \
+      --widths 12,6,6,4,6,12,28 --print
+  else
+    meeting_rows | column -t -s $'\t'
+  fi
 }
 
 pending_transcriptions() {
@@ -768,7 +781,7 @@ main_menu() {
   while true; do
     clear || true
     style "🎙 Reuniões"
-    echo "Projeto: $REUNIOES_DIR"; echo
+    info "Projeto: $REUNIOES_DIR"; echo
     choice="$(choose "Escolhe" \
       "Gravar nova reunião" "Ver estado" "Transcrever áudio pendente" "Refazer transcrição" \
       "Arquivar um WAV para OPUS" "Arquivar todos os WAV elegíveis" "Limpar WAV antigos" \
