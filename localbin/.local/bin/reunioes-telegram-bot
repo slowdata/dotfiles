@@ -209,7 +209,6 @@ def main() -> None:
 
     offset = 0
     while True:
-        params = urllib.parse.urlencode({"timeout": POLL_TIMEOUT, "offset": offset}).encode("ascii")
         try:
             result = api("getUpdates", {"timeout": POLL_TIMEOUT, "offset": offset})
             for update in result.get("result", []):

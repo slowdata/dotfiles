@@ -6,10 +6,18 @@ err() { printf '❌ %s\n' "$*" >&2; }
 warn() { printf '⚠️  %s\n' "$*" >&2; }
 info() { printf 'ℹ️  %s\n' "$*"; }
 
+REUNIOES_ENV="${REUNIOES_ENV:-$HOME/.config/reunioes/env}"
+if [[ -f "$REUNIOES_ENV" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$REUNIOES_ENV"
+    set +a
+fi
+
 if [[ $# -lt 1 ]]; then
     echo "Uso: transcrever-reuniao /caminho/para/audio.wav [ficheiro_saida.md]" >&2
     echo "Variáveis: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt CHUNK_SECONDS=180 TRIM_SILENCE=1 ARCHIVE_OPUS=0" >&2
-    echo "           FASTER_WHISPER_PYTHON=... TRANSCRICOES_DIR=... OPUS_DIR=... ARCHIVE_INDEX=..." >&2
+    echo "           REUNIOES_ENV=~/.config/reunioes/env FASTER_WHISPER_PYTHON=... TRANSCRICOES_DIR=... OPUS_DIR=... ARCHIVE_INDEX=..." >&2
     echo "           AUDIO_STABLE_CHECKS=2 AUDIO_STABLE_INTERVAL=3" >&2
     exit 1
 fi
@@ -31,7 +39,7 @@ else
     OUTPUT_FILE="${AUDIO_FILE%.*}.md"
 fi
 
-WHISPER_MODEL="${WHISPER_MODEL:-large-v3}"
+WHISPER_MODEL="${WHISPER_MODEL:-${WHISPER_MODEL_DEFAULT:-large-v3}}"
 WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-pt}"
 CHUNK_SECONDS="${CHUNK_SECONDS:-180}"
 TRIM_SILENCE="${TRIM_SILENCE:-1}"

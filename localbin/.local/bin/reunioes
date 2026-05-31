@@ -2,6 +2,14 @@
 
 set -euo pipefail
 
+REUNIOES_ENV="${REUNIOES_ENV:-$HOME/.config/reunioes/env}"
+if [[ -f "$REUNIOES_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$REUNIOES_ENV"
+  set +a
+fi
+
 REUNIOES_DIR="${REUNIOES_DIR:-$HOME/Sync/Reunioes}"
 TRANSCRICOES_DIR="${TRANSCRICOES_DIR:-$REUNIOES_DIR/transcricoes}"
 AUDIO_DIR="${AUDIO_DIR:-$REUNIOES_DIR/audio}"
@@ -319,11 +327,15 @@ pending_transcriptions() {
   init_project_dirs
   shopt -s nullglob
   local audio key
+  local -A seen=()
+  # Preferir WAV quando existem WAV+OPUS sem transcrição.
   for audio in "$WAV_DIR"/*.wav "$OPUS_DIR"/*.opus; do
     [[ -f "$audio" ]] || continue
     key="$(key_from_path "$audio")"
+    [[ -n "${seen[$key]:-}" ]] && continue
+    seen[$key]=1
     [[ -f "$(md_for_key "$key")" ]] || printf '%s\n' "$audio"
-  done | sort
+  done
 }
 
 choose_audio_file() {
@@ -551,13 +563,16 @@ remote_pending_audio() {
   init_project_dirs
   shopt -s nullglob
   local audio key
+  local -A seen=()
   # Preferir WAV publicado por Syncthing. OPUS fica como fallback para casos sem WAV.
   for audio in "$WAV_DIR"/*.wav "$OPUS_DIR"/*.opus; do
     [[ -f "$audio" ]] || continue
     key="$(key_from_path "$audio")"
+    [[ -n "${seen[$key]:-}" ]] && continue
+    seen[$key]=1
     [[ -f "$(md_for_key "$key")" ]] && continue
     printf '%s\n' "$audio"
-  done | sort
+  done
 }
 
 remote_running_sessions() {
