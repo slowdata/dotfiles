@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-TryExec=footclient
-Exec=footclient
+TryExec=/home/dias/.local/bin/dotfiles-terminal
+Exec=/home/dias/.local/bin/dotfiles-terminal
 Icon=foot
 Terminal=false
 Categories=System;TerminalEmulator;
@@ -18,4 +18,4 @@ X-TerminalArgDir=--working-directory=
 
 [Desktop Action New]
 Name=New Terminal
-Exec=footclient
+Exec=/home/dias/.local/bin/dotfiles-terminal

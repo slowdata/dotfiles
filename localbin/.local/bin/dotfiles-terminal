@@ -112,6 +112,11 @@ launch_with_footclient() {
         cmd=("$@")
         break
         ;;
+      -e)
+        shift
+        cmd=("$@")
+        break
+        ;;
       *)
         cmd=("$@")
         break
@@ -119,7 +124,8 @@ launch_with_footclient() {
     esac
   done
 
-  local -a foot_args=(-N --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock" --term=foot)
+  local -a terminal_env=(TERM_PROGRAM=foot FOOT_TERMINAL=1 COLORTERM=truecolor)
+  local -a foot_args=(-N --client-environment --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock" --term=foot)
   [[ -n "$dir" ]] && foot_args+=(--working-directory="$dir")
   [[ -n "$title" ]] && foot_args+=(--title="$title")
   [[ -n "$app_id" ]] && foot_args+=(--app-id="$app_id")
@@ -128,9 +134,9 @@ launch_with_footclient() {
 
   if command -v footclient >/dev/null 2>&1 && start_foot_socket; then
     if ((${#cmd[@]})); then
-      footclient "${foot_args[@]}" -- "${cmd[@]}" && return 0
+      env "${terminal_env[@]}" footclient "${foot_args[@]}" -- "${cmd[@]}" && return 0
     else
-      footclient "${foot_args[@]}" && return 0
+      env "${terminal_env[@]}" footclient "${foot_args[@]}" && return 0
     fi
   fi
 
@@ -143,9 +149,9 @@ launch_with_footclient() {
     [[ -n "$hold" ]] && foot_fallback+=(--hold)
 
     if ((${#cmd[@]})); then
-      exec foot "${foot_fallback[@]}" -- "${cmd[@]}"
+      exec env "${terminal_env[@]}" foot "${foot_fallback[@]}" -- "${cmd[@]}"
     else
-      exec foot "${foot_fallback[@]}"
+      exec env "${terminal_env[@]}" foot "${foot_fallback[@]}"
     fi
   fi
 
