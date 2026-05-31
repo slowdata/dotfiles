@@ -5,6 +5,8 @@
 _claude_backup/
 _pi_backup/
 _quarantine/**
+**/__pycache__/
+*.bak.*
 
 # Claude Code runtime/state/secrets — não versionar
 claude/.claude/.credentials.json

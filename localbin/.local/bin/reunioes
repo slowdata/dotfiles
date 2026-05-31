@@ -3,508 +3,700 @@
 set -euo pipefail
 
 REUNIOES_DIR="${REUNIOES_DIR:-$HOME/Sync/Reunioes}"
+TRANSCRICOES_DIR="${TRANSCRICOES_DIR:-$REUNIOES_DIR/transcricoes}"
+AUDIO_DIR="${AUDIO_DIR:-$REUNIOES_DIR/audio}"
+WAV_DIR="${WAV_DIR:-$AUDIO_DIR/wav}"
+LOCAL_WAV_DIR="${LOCAL_WAV_DIR:-$HOME/.local/state/reunioes/wav}"
+OPUS_DIR="${OPUS_DIR:-$AUDIO_DIR/opus}"
+LOG_DIR="${LOG_DIR:-$REUNIOES_DIR/logs}"
+BACKUP_DIR="${BACKUP_DIR:-$REUNIOES_DIR/backups}"
 WHISPER_MODEL_DEFAULT="${WHISPER_MODEL_DEFAULT:-large-v3}"
 CHUNK_SECONDS_DEFAULT="${CHUNK_SECONDS_DEFAULT:-180}"
 OPUS_BITRATE="${OPUS_BITRATE:-48k}"
 KEEP_WAV_DAYS="${KEEP_WAV_DAYS:-14}"
+QC_MIN_DURATION_SECONDS="${QC_MIN_DURATION_SECONDS:-60}"
+QC_MAX_DURATION_SECONDS="${QC_MAX_DURATION_SECONDS:-10800}"
+QC_SILENCE_NOISE="${QC_SILENCE_NOISE:--45dB}"
+QC_SILENCE_MIN_DURATION="${QC_SILENCE_MIN_DURATION:-2}"
+QC_MAX_SILENCE_PERCENT="${QC_MAX_SILENCE_PERCENT:-60}"
+QC_MIN_MAX_VOLUME_DB="${QC_MIN_MAX_VOLUME_DB:--35}"
+ARCHIVE_INDEX="${ARCHIVE_INDEX:-$REUNIOES_DIR/.arquivo-audio.tsv}"
 
 has() { command -v "$1" >/dev/null 2>&1; }
 use_gum() { has gum && [[ -t 0 && -t 1 ]] && ( : </dev/tty ) 2>/dev/null; }
 
-style() {
-  if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi
-}
-
+style() { if use_gum; then gum style --foreground 212 --bold "$@"; else printf '%s\n' "$*"; fi; }
 info() { printf 'ℹ️  %s\n' "$*"; }
 warn() { printf '⚠️  %s\n' "$*"; }
 err() { printf '❌ %s\n' "$*" >&2; }
 
 pause() {
   echo
-  if ( : </dev/tty ) 2>/dev/null; then
-    read -rp "Enter para continuar..." _ </dev/tty || true
-  elif [[ -t 0 ]]; then
-    read -rp "Enter para continuar..." _ || true
-  fi
+  if ( : </dev/tty ) 2>/dev/null; then read -rp "Enter para continuar..." _ </dev/tty || true
+  elif [[ -t 0 ]]; then read -rp "Enter para continuar..." _ || true; fi
 }
 
 confirm() {
   local prompt="$1" answer
-  if use_gum; then
-    gum confirm "$prompt" </dev/tty >/dev/tty
+  if use_gum; then gum confirm "$prompt" </dev/tty >/dev/tty
   else
-    if ( : </dev/tty ) 2>/dev/null; then
-      read -rp "$prompt [y/N] " answer </dev/tty
-    else
-      read -rp "$prompt [y/N] " answer
-    fi
+    if ( : </dev/tty ) 2>/dev/null; then read -rp "$prompt [y/N] " answer </dev/tty
+    else read -rp "$prompt [y/N] " answer; fi
     [[ "${answer,,}" == "y" || "${answer,,}" == "yes" || "${answer,,}" == "s" || "${answer,,}" == "sim" ]]
   fi
 }
 
 choose() {
   local header="$1"; shift
-  if use_gum; then
-    # Passar opções como argumentos evita problemas de stdin/TTY em algumas versões do gum.
-    # Ler de /dev/tty evita que command substitution deixe o menu sem input.
-    gum choose --header "$header" --height 15 "$@" </dev/tty
+  if use_gum; then gum choose --header "$header" --height 15 "$@" </dev/tty
   else
-    local options=("$@") i opt
+    local opt
     echo "$header" >/dev/tty
-    select opt in "${options[@]}"; do
-      [[ -n "${opt:-}" ]] && { printf '%s\n' "$opt"; return 0; }
-    done </dev/tty
+    select opt in "$@"; do [[ -n "${opt:-}" ]] && { printf '%s\n' "$opt"; return 0; }; done </dev/tty
   fi
 }
 
 input() {
   local prompt="$1" default="${2:-}" value
-  if use_gum; then
-    gum input --prompt "$prompt " --value "$default" </dev/tty
+  if use_gum; then gum input --prompt "$prompt " --value "$default" </dev/tty
   else
-    if ( : </dev/tty ) 2>/dev/null; then
-      read -rp "$prompt [$default] " value </dev/tty
-    else
-      read -rp "$prompt [$default] " value
-    fi
+    if ( : </dev/tty ) 2>/dev/null; then read -rp "$prompt [$default] " value </dev/tty
+    else read -rp "$prompt [$default] " value; fi
     printf '%s\n' "${value:-$default}"
   fi
 }
 
-file_base() {
-  local f="$1"
-  printf '%s' "${f%.*}"
+init_project_dirs() {
+  mkdir -p "$TRANSCRICOES_DIR" "$WAV_DIR" "$LOCAL_WAV_DIR" "$OPUS_DIR" "$LOG_DIR" "$BACKUP_DIR"
+  ensure_archive_index
+  ensure_syncthing_ignore
 }
 
-human_size() {
-  if has numfmt; then numfmt --to=iec --suffix=B "$1"; else printf '%sB' "$1"; fi
+ensure_syncthing_ignore() {
+  local ignore_file="$REUNIOES_DIR/.stignore"
+  touch "$ignore_file"
+  grep -qxF '.incoming-*' "$ignore_file" || printf '%s\n' '.incoming-*' >> "$ignore_file"
+  grep -qxF '*.part' "$ignore_file" || printf '%s\n' '*.part' >> "$ignore_file"
+  grep -qxF '*.tmp' "$ignore_file" || printf '%s\n' '*.tmp' >> "$ignore_file"
 }
 
-file_size() {
-  stat -c '%s' "$1" 2>/dev/null || printf '0'
+file_base() { local f="$1"; printf '%s' "${f%.*}"; }
+file_size() { stat -c '%s' "$1" 2>/dev/null || printf '0'; }
+human_size() { if has numfmt; then numfmt --to=iec --suffix=B "$1"; else printf '%sB' "$1"; fi; }
+key_from_path() { basename "$(file_base "$1")"; }
+md_for_key() { printf '%s/%s.md' "$TRANSCRICOES_DIR" "$1"; }
+wav_for_key() { printf '%s/%s.wav' "$WAV_DIR" "$1"; }
+opus_for_key() { printf '%s/%s.opus' "$OPUS_DIR" "$1"; }
+local_wav_for_key() { printf '%s/%s.wav' "$LOCAL_WAV_DIR" "$1"; }
+
+audio_quality_check() {
+  local audio="$1" report="$2" duration duration_h vol_log silence_log mean_volume max_volume silence_total silence_pct warnings=0
+  mkdir -p "$(dirname "$report")"
+  vol_log="$(mktemp)"
+  silence_log="$(mktemp)"
+
+  duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$audio" 2>/dev/null || printf '0')"
+  duration_h="$(awk -v d="$duration" 'BEGIN { h=int(d/3600); m=int((d%3600)/60); s=int(d%60); printf "%02d:%02d:%02d", h, m, s }')"
+
+  ffmpeg -hide_banner -nostats -i "$audio" -af volumedetect -f null - > /dev/null 2>"$vol_log" || true
+  mean_volume="$(awk -F': ' '/mean_volume:/ {print $2}' "$vol_log" | awk '{print $1}' | tail -1)"
+  max_volume="$(awk -F': ' '/max_volume:/ {print $2}' "$vol_log" | awk '{print $1}' | tail -1)"
+  mean_volume="${mean_volume:-n/a}"
+  max_volume="${max_volume:-n/a}"
+
+  ffmpeg -hide_banner -nostats -i "$audio" -af "silencedetect=noise=${QC_SILENCE_NOISE}:d=${QC_SILENCE_MIN_DURATION}" -f null - > /dev/null 2>"$silence_log" || true
+  silence_total="$(awk '/silence_duration:/ {sum += $NF} END {printf "%.3f", sum + 0}' "$silence_log")"
+  silence_pct="$(awk -v s="$silence_total" -v d="$duration" 'BEGIN { if (d > 0) printf "%.1f", (s / d) * 100; else printf "0.0" }')"
+
+  {
+    echo "# Qualidade da gravação"
+    echo "Data: $(date --iso-8601=seconds)"
+    echo "Ficheiro: $audio"
+    echo "Duração: $duration_h (${duration}s)"
+    echo "Tamanho: $(human_size "$(file_size "$audio")")"
+    echo "Volume médio: ${mean_volume} dB"
+    echo "Volume máximo: ${max_volume} dB"
+    echo "Silêncio detectado: ${silence_total}s (${silence_pct}%)"
+    echo "Parâmetros: silêncio=${QC_SILENCE_NOISE}, janela=${QC_SILENCE_MIN_DURATION}s, máx silêncio=${QC_MAX_SILENCE_PERCENT}%, duração máx=${QC_MAX_DURATION_SECONDS}s"
+    echo
+    echo "## Avisos"
+  } > "$report"
+
+  if awk -v d="$duration" -v min="$QC_MIN_DURATION_SECONDS" 'BEGIN { exit !(d < min) }'; then
+    echo "- Duração muito curta (< ${QC_MIN_DURATION_SECONDS}s). Pode ser gravação acidental/incompleta." | tee -a "$report"
+    warnings=$((warnings + 1))
+  fi
+  if awk -v d="$duration" -v max="$QC_MAX_DURATION_SECONDS" 'BEGIN { exit !(d > max) }'; then
+    echo "- Duração muito longa (> ${QC_MAX_DURATION_SECONDS}s). Podes ter esquecido a gravação ligada." | tee -a "$report"
+    warnings=$((warnings + 1))
+  fi
+  if [[ "$max_volume" != "n/a" ]] && awk -v v="$max_volume" -v min="$QC_MIN_MAX_VOLUME_DB" 'BEGIN { exit !(v < min) }'; then
+    echo "- Volume máximo muito baixo (${max_volume} dB). Pode haver silêncio ou captação errada." | tee -a "$report"
+    warnings=$((warnings + 1))
+  fi
+  if awk -v p="$silence_pct" -v max="$QC_MAX_SILENCE_PERCENT" 'BEGIN { exit !(p > max) }'; then
+    echo "- Percentagem de silêncio elevada (${silence_pct}%). Pode haver gravação vazia ou demasiado tempo morto." | tee -a "$report"
+    warnings=$((warnings + 1))
+  fi
+  if (( warnings == 0 )); then
+    echo "- Sem avisos automáticos." >> "$report"
+  fi
+
+  rm -f -- "$vol_log" "$silence_log"
+  cat "$report"
+  return "$warnings"
+}
+
+publish_wav() {
+  local src="$1" dst="$2" dst_dir tmp src_dev dst_dev src_size tmp_size
+  dst_dir="$(dirname "$dst")"
+  mkdir -p "$dst_dir"
+  if [[ -e "$dst" ]]; then
+    err "Destino já existe, não vou sobrescrever: $dst"
+    return 1
+  fi
+
+  src_dev="$(stat -c '%d' "$src")"
+  dst_dev="$(stat -c '%d' "$dst_dir")"
+  if [[ "$src_dev" == "$dst_dev" ]]; then
+    mv -- "$src" "$dst"
+    return 0
+  fi
+
+  # Fallback para filesystems diferentes: copiar para nome ignorado pelo Syncthing e só depois renomear.
+  tmp="$dst_dir/.incoming-$(basename "$dst")"
+  rm -f -- "$tmp"
+  cp --reflink=auto --preserve=timestamps -- "$src" "$tmp"
+  src_size="$(file_size "$src")"
+  tmp_size="$(file_size "$tmp")"
+  if [[ "$src_size" != "$tmp_size" ]]; then
+    rm -f -- "$tmp"
+    err "Cópia incompleta: origem=$src_size destino=$tmp_size"
+    return 1
+  fi
+  mv -- "$tmp" "$dst"
+  rm -f -- "$src"
+}
+
+ensure_archive_index() {
+  mkdir -p "$(dirname "$ARCHIVE_INDEX")"
+  if [[ ! -f "$ARCHIVE_INDEX" ]]; then
+    printf 'base\twav_bytes\topus_bytes\tsaved_bytes\topus_created_at\twav_removed_at\n' > "$ARCHIVE_INDEX"
+  fi
+}
+
+archive_saved_bytes() {
+  local base="$1"
+  [[ -f "$ARCHIVE_INDEX" ]] || return 1
+  awk -F '\t' -v base="$base" 'NR > 1 && $1 == base && $4 ~ /^[0-9]+$/ { saved = $4 } END { if (saved != "") print saved }' "$ARCHIVE_INDEX"
+}
+
+archive_upsert_unlocked() {
+  local base="$1" wav_bytes="$2" opus_bytes="$3" saved_bytes="$4" opus_created_at="$5" wav_removed_at="${6:-}" tmp
+  tmp="$(mktemp)"
+  awk -F '\t' -v OFS='\t' \
+    -v base="$base" -v wav="$wav_bytes" -v opus="$opus_bytes" -v saved="$saved_bytes" \
+    -v created="$opus_created_at" -v removed="$wav_removed_at" '
+      NR == 1 { print; next }
+      $1 == base {
+        if (removed == "" && $6 != "") removed = $6
+        print base, wav, opus, saved, created, removed
+        found = 1
+        next
+      }
+      { print }
+      END { if (!found) print base, wav, opus, saved, created, removed }
+    ' "$ARCHIVE_INDEX" > "$tmp"
+  mv -- "$tmp" "$ARCHIVE_INDEX"
+}
+
+archive_with_lock() {
+  ensure_archive_index
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 9
+      "$@"
+    ) 9>"$ARCHIVE_INDEX.lock"
+  else
+    "$@"
+  fi
+}
+
+archive_upsert() {
+  archive_with_lock archive_upsert_unlocked "$@"
+}
+
+archive_record_opus() {
+  local wav="$1" opus="$2" base wav_bytes opus_bytes saved_bytes
+  [[ -s "$wav" && -s "$opus" ]] || return 0
+  base="$(key_from_path "$wav")"
+  wav_bytes="$(file_size "$wav")"
+  opus_bytes="$(file_size "$opus")"
+  saved_bytes=0
+  if (( wav_bytes > opus_bytes )); then saved_bytes=$((wav_bytes - opus_bytes)); fi
+  archive_upsert "$base" "$wav_bytes" "$opus_bytes" "$saved_bytes" "$(date --iso-8601=seconds)" ""
+  info "Poupança registada: $(human_size "$saved_bytes") em $ARCHIVE_INDEX"
+}
+
+archive_mark_removed_unlocked() {
+  local base="$1" removed="$2" tmp
+  tmp="$(mktemp)"
+  awk -F '\t' -v OFS='\t' -v base="$base" -v removed="$removed" '
+    NR == 1 { print; next }
+    $1 == base { $6 = removed; found = 1 }
+    { print }
+    END { if (!found) print base, "", "", "", "", removed }
+  ' "$ARCHIVE_INDEX" > "$tmp"
+  mv -- "$tmp" "$ARCHIVE_INDEX"
+}
+
+archive_mark_removed() {
+  local wav="$1" base opus removed
+  base="$(key_from_path "$wav")"
+  opus="$(opus_for_key "$base")"
+  if [[ -f "$wav" && -f "$opus" ]]; then archive_record_opus "$wav" "$opus"; fi
+  removed="$(date --iso-8601=seconds)"
+  archive_with_lock archive_mark_removed_unlocked "$base" "$removed"
+}
+
+meeting_keys() {
+  init_project_dirs
+  shopt -s nullglob
+  local f key
+  for f in "$TRANSCRICOES_DIR"/reuniao_*.md "$WAV_DIR"/reuniao_*.wav "$LOCAL_WAV_DIR"/reuniao_*.wav "$OPUS_DIR"/reuniao_*.opus; do
+    [[ -f "$f" ]] || continue
+    case "${f##*/}" in *.bak-*.md|*.partial.md|*.retry*.md) continue;; esac
+    key="$(key_from_path "$f")"
+    printf '%s\n' "$key"
+  done | sort -u
 }
 
 meeting_rows() {
-  shopt -s nullglob
-  local seen=() files=() f base key wav md opus size_wav size_opus saved status date name
-  for f in "$REUNIOES_DIR"/reuniao_*.*; do
-    [[ -f "$f" ]] || continue
-    case "$f" in *.wav|*.md|*.opus) ;; *) continue;; esac
-    case "${f##*/}" in *.bak-*.md|*.partial.md|*.retry*.md) continue;; esac
-    base="$(file_base "$f")"
-    key="${base##*/}"
-    if [[ " ${seen[*]} " != *" $key "* ]]; then
-      seen+=("$key")
-      files+=("$base")
-    fi
-  done
-
+  local key wav md opus wav_s md_s opus_s saved size_wav size_opus date hour
   printf 'Data\tHora\tWAV\tMD\tOPUS\tPoupança\tBase\n'
-  for base in "${files[@]}"; do
-    wav="$base.wav"; md="$base.md"; opus="$base.opus"
-    [[ -e "$wav" ]] && status="✅" || status="—"
-    local wav_s="$status"
-    [[ -e "$md" ]] && status="✅" || status="—"
-    local md_s="$status"
-    [[ -e "$opus" ]] && status="✅" || status="—"
-    local opus_s="$status"
+  while IFS= read -r key; do
+    wav="$(wav_for_key "$key")"; md="$(md_for_key "$key")"; opus="$(opus_for_key "$key")"
+    if [[ -e "$wav" ]]; then
+      wav_s="✅"
+    elif [[ -e "$(local_wav_for_key "$key")" ]]; then
+      wav_s="local"
+    else
+      wav_s="—"
+    fi
+    [[ -e "$md" ]] && md_s="✅" || md_s="—"
+    [[ -e "$opus" ]] && opus_s="✅" || opus_s="—"
     saved="—"
     if [[ -e "$wav" && -e "$opus" ]]; then
       size_wav=$(file_size "$wav"); size_opus=$(file_size "$opus")
       if (( size_wav > size_opus )); then saved="$(human_size $((size_wav - size_opus)))"; fi
+    elif [[ -e "$opus" ]]; then
+      size_opus=$(archive_saved_bytes "$key" || true)
+      if [[ "${size_opus:-}" =~ ^[0-9]+$ && "$size_opus" -gt 0 ]]; then saved="$(human_size "$size_opus")"; fi
     fi
-    name="${base##*/}"
-    if [[ "$name" =~ ^reuniao_([0-9]{4}-[0-9]{2}-[0-9]{2})_([0-9]{2})([0-9]{2})$ ]]; then
+    if [[ "$key" =~ ^reuniao_([0-9]{4}-[0-9]{2}-[0-9]{2})_([0-9]{2})([0-9]{2})$ ]]; then
       date="${BASH_REMATCH[1]}"; hour="${BASH_REMATCH[2]}:${BASH_REMATCH[3]}"
     else
       date="?"; hour="?"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$date" "$hour" "$wav_s" "$md_s" "$opus_s" "$saved" "$name"
-  done | sort
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$date" "$hour" "$wav_s" "$md_s" "$opus_s" "$saved" "$key"
+  done < <(meeting_keys)
 }
 
 show_status() {
+  init_project_dirs
   style "Reuniões — estado"
-  echo "Pasta: $REUNIOES_DIR"
+  echo "Projeto: $REUNIOES_DIR"
+  echo "Transcrições: $TRANSCRICOES_DIR"
+  echo "Áudio WAV publicado: $WAV_DIR"
+  echo "Áudio WAV local/pendente: $LOCAL_WAV_DIR"
+  echo "Áudio OPUS: $OPUS_DIR"
   echo
-  if use_gum; then
-    # --print mostra a tabela e sai; sem isto o gum table fica em modo interativo.
-    meeting_rows | gum table --separator $'\t' --height 25 --print
-  else
-    meeting_rows | column -t -s $'\t'
-  fi
+  if use_gum; then meeting_rows | gum table --separator $'\t' --height 25 --print
+  else meeting_rows | column -t -s $'\t'; fi
 }
 
 pending_transcriptions() {
+  init_project_dirs
   shopt -s nullglob
-  local wav base
-  for wav in "$REUNIOES_DIR"/*.wav "$REUNIOES_DIR"/*.opus; do
-    [[ -f "$wav" ]] || continue
-    base="$(file_base "$wav")"
-    [[ -f "$base.md" ]] || printf '%s\n' "$wav"
-  done
+  local audio key
+  for audio in "$WAV_DIR"/*.wav "$OPUS_DIR"/*.opus; do
+    [[ -f "$audio" ]] || continue
+    key="$(key_from_path "$audio")"
+    [[ -f "$(md_for_key "$key")" ]] || printf '%s\n' "$audio"
+  done | sort
 }
 
 choose_audio_file() {
   local prompt="$1"
   mapfile -t files < <(pending_transcriptions)
-  if (( ${#files[@]} == 0 )); then
-    warn "Não há áudio pendente de transcrição."
-    return 1
-  fi
+  if (( ${#files[@]} == 0 )); then warn "Não há áudio pendente de transcrição."; return 1; fi
   choose "$prompt" "${files[@]}"
 }
 
 transcribe_pending() {
-  local audio lang archive model chunks
+  local audio key lang archive model chunks output
   audio="$(choose_audio_file "Áudio para transcrever")" || { pause; return; }
-  lang="$(choose "Língua" "pt" "en" "auto")"
-  [[ "$lang" == "auto" ]] && lang=""
+  key="$(key_from_path "$audio")"
+  output="$(md_for_key "$key")"
+  lang="$(choose "Língua" "pt" "en" "auto")"; [[ "$lang" == "auto" ]] && lang=""
   model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
   chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
-
   archive="0"
-  if confirm "Criar OPUS no fim da transcrição? (mantém WAV)"; then archive="1"; fi
-
-  echo
-  info "A transcrever: $audio"
-  info "Modelo=$model Língua=${lang:-auto} Chunks=$chunks ARCHIVE_OPUS=$archive"
-  echo
+  if [[ "$audio" == *.wav ]] && confirm "Criar OPUS no fim da transcrição? (mantém WAV)"; then archive="1"; fi
+  echo; info "A transcrever: $audio -> $output"
   if [[ -n "$lang" ]]; then
-    WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio"
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$output"
   else
-    WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio"
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$output"
   fi
   pause
 }
 
 all_audio_files() {
+  init_project_dirs
   shopt -s nullglob
   local audio
-  for audio in "$REUNIOES_DIR"/*.wav "$REUNIOES_DIR"/*.opus; do
-    [[ -f "$audio" ]] && printf '%s\n' "$audio"
-  done | sort -r
+  for audio in "$WAV_DIR"/*.wav "$OPUS_DIR"/*.opus; do [[ -f "$audio" ]] && printf '%s\n' "$audio"; done | sort -r
 }
 
 choose_any_audio_file() {
   local prompt="$1"
   mapfile -t files < <(all_audio_files)
-  if (( ${#files[@]} == 0 )); then
-    warn "Não há ficheiros áudio em $REUNIOES_DIR."
-    return 1
-  fi
+  if (( ${#files[@]} == 0 )); then warn "Não há ficheiros áudio."; return 1; fi
   choose "$prompt" "${files[@]}"
 }
 
 retranscribe_job() {
-  local audio="$1" tmp_output="$2" final_output="$3" lang="$4" model="$5" chunks="$6" archive="$7"
-  local backup rc=0
-
+  local audio="$1" tmp_output="$2" final_output="$3" lang="$4" model="$5" chunks="$6" archive="$7" backup rc=0
+  init_project_dirs
   info "A refazer transcrição: $audio"
   info "Output temporário: $tmp_output"
   info "Output final: $final_output"
-  info "Modelo=$model Língua=${lang:-auto} Chunks=$chunks ARCHIVE_OPUS=$archive"
-  echo
-
+  mkdir -p "$(dirname "$tmp_output")" "$(dirname "$final_output")"
   if [[ -n "$lang" ]]; then
-    WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$tmp_output" || rc=$?
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$tmp_output" || rc=$?
   else
-    WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$tmp_output" || rc=$?
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$tmp_output" || rc=$?
   fi
-
-  if (( rc != 0 )); then
-    err "Transcrição falhou com código $rc. Mantido output temporário/parcial: $tmp_output"
-    return "$rc"
-  fi
-
+  if (( rc != 0 )); then err "Transcrição falhou com código $rc. Mantido temp/parcial: $tmp_output"; return "$rc"; fi
   if [[ -f "$final_output" ]]; then
-    backup="${final_output%.md}.bak-$(date +%Y%m%d-%H%M%S).md"
+    backup="$BACKUP_DIR/$(basename "${final_output%.md}").bak-$(date +%Y%m%d-%H%M%S).md"
     mv -- "$final_output" "$backup"
     info "Transcrição anterior guardada: $backup"
   fi
-
   mv -- "$tmp_output" "$final_output"
   info "Transcrição refeita: $final_output"
 }
 
 retranscribe_audio() {
-  local audio lang archive model chunks base final_output tmp_output log_file session cmd
+  local audio key lang archive model chunks final_output tmp_output log_file session cmd
   audio="$(choose_any_audio_file "Áudio para refazer transcrição")" || { pause; return; }
-  base="$(file_base "$audio")"
-  final_output="$base.md"
-  tmp_output="$base.retry-$(date +%Y%m%d-%H%M%S).md"
-  log_file="$base.retranscrever-$(date +%Y%m%d-%H%M%S).log"
-
-  if [[ -f "$final_output" ]]; then
-    warn "Já existe transcrição: $final_output"
-    confirm "Refazer? A versão atual será guardada como backup" || return
-  fi
-
-  lang="$(choose "Língua" "pt" "en" "auto")"
-  [[ "$lang" == "auto" ]] && lang=""
+  key="$(key_from_path "$audio")"
+  final_output="$(md_for_key "$key")"
+  tmp_output="$BACKUP_DIR/${key}.retry-$(date +%Y%m%d-%H%M%S).md"
+  log_file="$LOG_DIR/${key}.retranscrever-$(date +%Y%m%d-%H%M%S).log"
+  if [[ -f "$final_output" ]]; then warn "Já existe transcrição: $final_output"; confirm "Refazer? A versão atual será guardada em backups/" || return; fi
+  lang="$(choose "Língua" "pt" "en" "auto")"; [[ "$lang" == "auto" ]] && lang=""
   model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
   chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
-
   archive="0"
   if [[ "$audio" == *.wav ]] && confirm "Criar/atualizar OPUS no fim? (mantém WAV)"; then archive="1"; fi
-
   if has tmux && confirm "Correr em background/tmux? (recomendado se estás remoto/telemóvel)"; then
     session="reunioes_refazer_$(date +%Y%m%d_%H%M%S)"
     printf -v cmd '%q ' reunioes refazer-job "$audio" "$tmp_output" "$final_output" "$lang" "$model" "$chunks" "$archive"
     tmux new-session -d -s "$session" "$cmd > $(printf '%q' "$log_file") 2>&1; echo EXIT:\$? >> $(printf '%q' "$log_file")"
     info "Job lançado em tmux: $session"
     info "Log: $log_file"
-    info "Ver progresso: tail -f $(printf '%q' "$log_file")"
   else
-    if ! retranscribe_job "$audio" "$tmp_output" "$final_output" "$lang" "$model" "$chunks" "$archive"; then
-      err "Falhou. A transcrição anterior foi preservada. Parcial/temp: $tmp_output"
-      return 1
-    fi
+    retranscribe_job "$audio" "$tmp_output" "$final_output" "$lang" "$model" "$chunks" "$archive"
   fi
   pause
 }
 
 archive_candidates() {
+  init_project_dirs
   shopt -s nullglob
-  local wav base
-  for wav in "$REUNIOES_DIR"/*.wav; do
+  local wav key
+  for wav in "$WAV_DIR"/*.wav; do
     [[ -f "$wav" ]] || continue
-    base="$(file_base "$wav")"
-    [[ -f "$base.md" && ! -f "$base.opus" ]] && printf '%s\n' "$wav"
-  done
+    key="$(key_from_path "$wav")"
+    [[ -f "$(md_for_key "$key")" && ! -f "$(opus_for_key "$key")" ]] && printf '%s\n' "$wav"
+  done | sort
 }
 
 make_opus() {
-  local wav="$1" opus="${wav%.*}.opus"
+  local wav="$1" key opus
+  init_project_dirs
+  key="$(key_from_path "$wav")"
+  opus="$(opus_for_key "$key")"
   ffmpeg -hide_banner -loglevel error -y -i "$wav" \
     -c:a libopus -b:a "$OPUS_BITRATE" -vbr on -compression_level 10 -ac 1 \
     "$opus"
+  archive_record_opus "$wav" "$opus"
 }
 
 archive_one() {
   mapfile -t files < <(archive_candidates)
-  if (( ${#files[@]} == 0 )); then
-    warn "Não há WAV com MD e sem OPUS."
-    pause; return
-  fi
-  local wav opus
-  wav="$(choose "WAV para arquivar em OPUS" "${files[@]}")"
-  [[ -n "$wav" ]] || return
-  info "A criar OPUS: $wav"
-  make_opus "$wav"
-  opus="${wav%.*}.opus"
-  info "Criado: $opus"
-  pause
+  if (( ${#files[@]} == 0 )); then warn "Não há WAV com MD e sem OPUS."; pause; return; fi
+  local wav
+  wav="$(choose "WAV para arquivar em OPUS" "${files[@]}")"; [[ -n "$wav" ]] || return
+  info "A criar OPUS: $wav"; make_opus "$wav"; info "Criado: $(opus_for_key "$(key_from_path "$wav")")"; pause
 }
 
 archive_all() {
   mapfile -t files < <(archive_candidates)
-  if (( ${#files[@]} == 0 )); then
-    warn "Não há WAV com MD e sem OPUS."
-    pause; return
-  fi
-  printf '%s\n' "${files[@]}"
-  echo
+  if (( ${#files[@]} == 0 )); then warn "Não há WAV com MD e sem OPUS."; pause; return; fi
+  printf '%s\n' "${files[@]}"; echo
   confirm "Criar OPUS para ${#files[@]} ficheiro(s)?" || return
-  local wav opus n=0 total=${#files[@]}
+  local wav n=0 total=${#files[@]}
   for wav in "${files[@]}"; do
-    n=$((n + 1))
-    opus="${wav%.*}.opus"
-    info "[$n/$total] A arquivar: $wav"
-    if make_opus "$wav"; then
-      info "[$n/$total] OK: $opus"
-    else
-      err "[$n/$total] Falhou: $wav"
-      return 1
-    fi
+    n=$((n + 1)); info "[$n/$total] A arquivar: $wav"
+    make_opus "$wav" || { err "[$n/$total] Falhou: $wav"; return 1; }
   done
   pause
 }
 
 cleanup_candidates() {
-  find "$REUNIOES_DIR" -maxdepth 1 -type f -name '*.wav' -mtime +"$KEEP_WAV_DAYS" -print | while read -r wav; do
-    base="$(file_base "$wav")"
-    [[ -f "$base.md" && -f "$base.opus" ]] && printf '%s\n' "$wav"
+  init_project_dirs
+  find "$WAV_DIR" -maxdepth 1 -type f -name '*.wav' -mtime +"$KEEP_WAV_DAYS" -print | while read -r wav; do
+    key="$(key_from_path "$wav")"
+    [[ -f "$(md_for_key "$key")" && -f "$(opus_for_key "$key")" ]] && printf '%s\n' "$wav"
   done
 }
 
 cleanup_wavs() {
-  local days
-  if [[ ! "$KEEP_WAV_DAYS" =~ ^[0-9]+$ ]]; then
-    warn "KEEP_WAV_DAYS inválido ('$KEEP_WAV_DAYS'); a usar 14."
-    KEEP_WAV_DAYS=14
-  fi
+  local days f
+  init_project_dirs
+  [[ "$KEEP_WAV_DAYS" =~ ^[0-9]+$ ]] || KEEP_WAV_DAYS=14
   days="$(input "Apagar WAV com mais de quantos dias? (número)" "$KEEP_WAV_DAYS")"
-  if [[ ! "$days" =~ ^[0-9]+$ ]]; then
-    warn "Valor inválido: '$days'. Indica um número de dias, por exemplo: 14."
-    pause; return
-  fi
+  [[ "$days" =~ ^[0-9]+$ ]] || { warn "Valor inválido: '$days'."; pause; return; }
   KEEP_WAV_DAYS="$days"
   mapfile -t files < <(cleanup_candidates)
-  if (( ${#files[@]} == 0 )); then
-    warn "Nenhum WAV elegível. Regra: idade > ${KEEP_WAV_DAYS} dias + MD + OPUS existentes."
-    pause; return
-  fi
-  echo "Elegíveis para apagar:"
-  printf '  %s\n' "${files[@]}"
-  echo
+  if (( ${#files[@]} == 0 )); then warn "Nenhum WAV elegível. Regra: idade > ${KEEP_WAV_DAYS} dias + MD + OPUS existentes."; pause; return; fi
+  echo "Elegíveis para apagar:"; printf '  %s\n' "${files[@]}"; echo
   confirm "Apagar estes ${#files[@]} WAV? (irreversível)" || return
-  local f
-  for f in "${files[@]}"; do
-    rm -v -- "$f"
-  done
+  for f in "${files[@]}"; do archive_mark_removed "$f"; rm -v -- "$f"; done
   pause
 }
 
 record_meeting() {
-  local timestamp audio_file monitor mic ffmpeg_pid ffmpeg_status
-  local recording_stopped=false
-
+  local timestamp audio_file monitor mic ffmpeg_pid ffmpeg_status recording_stopped=false
+  init_project_dirs
   timestamp=$(date +%Y-%m-%d_%H%M)
-  mkdir -p "$REUNIOES_DIR"
-  audio_file="$REUNIOES_DIR/reuniao_${timestamp}.wav"
-
-  local mic_gain="${MIC_GAIN:-1.20}"
-  local monitor_gain="${MONITOR_GAIN:-0.92}"
-  local output_rate="${OUTPUT_RATE:-24000}"
+  local key local_audio_file final_audio_file ffmpeg_log quality_log qc_status
+  key="reuniao_${timestamp}"
+  local_audio_file="$LOCAL_WAV_DIR/${key}.wav"
+  final_audio_file="$WAV_DIR/${key}.wav"
+  ffmpeg_log="$LOG_DIR/${key}.gravar.log"
+  quality_log="$LOG_DIR/${key}.qualidade.log"
+  audio_file="$local_audio_file"
+  local mic_gain="${MIC_GAIN:-1.20}" monitor_gain="${MONITOR_GAIN:-0.92}" output_rate="${OUTPUT_RATE:-24000}"
   local mic_filter="${MIC_FILTER:-highpass=f=80,lowpass=f=9000,afftdn=nf=-20,acompressor=threshold=0.09:ratio=3:attack=5:release=90:makeup=3,alimiter=limit=0.92}"
-
-  style "🎙 A gravar reunião"
-  echo "Ficheiro: $audio_file"
-  echo
-
-  monitor="$(pactl get-default-sink).monitor"
-  mic="$(pactl get-default-source)"
-
-  echo "Monitor : $monitor"
-  echo "Microfone: $mic"
-  echo
-  echo "Antes de gravar, confirma:"
-  echo "✅ Estás a ouvir a reunião pelo dispositivo correto?"
-  echo "✅ O microfone está ligado?"
-  echo
-
-  if ( : </dev/tty ) 2>/dev/null; then
-    read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ </dev/tty || return
-  else
-    read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ || return
+  style "🎙 A gravar reunião"; echo "Ficheiro temporário local: $local_audio_file"; echo "Destino final Sync: $final_audio_file"; echo
+  monitor="$(pactl get-default-sink 2>/dev/null || true)"
+  mic="$(pactl get-default-source 2>/dev/null || true)"
+  if [[ -z "$monitor" || -z "$mic" ]]; then
+    err "Não consegui obter source/sink do PipeWire/PulseAudio via pactl."
+    return 1
   fi
-  echo
-
-  stop_recording() {
-    recording_stopped=true
+  monitor="${monitor}.monitor"
+  echo "Monitor : $monitor"; echo "Microfone: $mic"; echo "Log ffmpeg: $ffmpeg_log"; echo
+  if [[ "$mic" == "$monitor" ]]; then
+    warn "O microfone predefinido é igual ao monitor de saída. Vais gravar áudio do sistema, mas provavelmente NÃO a tua voz por microfone separado."
+    confirm "Continuar mesmo assim?" || { warn "Gravação cancelada. Define o microfone correcto no sistema e tenta novamente."; return 0; }
     echo
-    echo "⏹  A parar gravação..."
-    [[ -n "${ffmpeg_pid:-}" ]] && kill "$ffmpeg_pid" 2>/dev/null || true
-  }
-
+  fi
+  echo "✅ Confirma que estás a ouvir a reunião pelo dispositivo correto e que o microfone está ligado."; echo
+  if ( : </dev/tty ) 2>/dev/null; then read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ </dev/tty || return
+  else read -rp "Prima Enter para começar a gravar (Ctrl+C para parar/cancelar)..." _ || return; fi
+  stop_recording() { recording_stopped=true; echo; echo "⏹  A parar gravação..."; [[ -n "${ffmpeg_pid:-}" ]] && kill -INT "$ffmpeg_pid" 2>/dev/null || true; }
   trap stop_recording INT
-
   ffmpeg -f pulse -i "$monitor" -f pulse -i "$mic" \
     -filter_complex "[0:a]aformat=channel_layouts=mono,volume=${monitor_gain}[mon];[1:a]aformat=channel_layouts=mono,${mic_filter},volume=${mic_gain}[mic];[mon][mic]amix=inputs=2:duration=longest:normalize=0[mix];[mix]alimiter=limit=0.95[out]" \
-    -map "[out]" -ar "$output_rate" -c:a pcm_s16le "$audio_file" 2>/dev/null &
+    -map "[out]" -ar "$output_rate" -c:a pcm_s16le "$audio_file" >"$ffmpeg_log" 2>&1 &
   ffmpeg_pid=$!
-
-  set +e
-  wait "$ffmpeg_pid"
-  ffmpeg_status=$?
-  set -e
-  trap - INT
-
-  if [[ $ffmpeg_status -ne 0 && $recording_stopped != true ]]; then
-    err "A gravação terminou de forma inesperada."
-    return "$ffmpeg_status"
+  set +e; wait "$ffmpeg_pid"; ffmpeg_status=$?; set -e; trap - INT
+  if [[ $ffmpeg_status -ne 0 && $recording_stopped != true ]]; then err "A gravação terminou de forma inesperada. Ver log: $ffmpeg_log"; return "$ffmpeg_status"; fi
+  if [[ ! -s "$local_audio_file" ]]; then err "WAV local vazio/inexistente: $local_audio_file"; return 1; fi
+  if has ffprobe && ! ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$local_audio_file" >/dev/null; then
+    err "WAV não validou com ffprobe: $local_audio_file"
+    return 1
   fi
-
-  echo
-  echo "✅ Gravação terminada"
-  echo "   WAV: $audio_file"
-  echo
-  echo "Para transcrever depois pelo TUI:"
-  echo "  reunioes transcrever"
-  echo
-  echo "Comando direto avançado:"
-  printf '  PT: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt transcrever-reuniao %q\n' "$audio_file"
-  printf '  EN: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=en transcrever-reuniao %q\n' "$audio_file"
+  set +e
+  audio_quality_check "$local_audio_file" "$quality_log"
+  qc_status=$?
+  set -e
+  if (( qc_status > 0 )); then
+    warn "A verificação automática levantou ${qc_status} aviso(s). Log: $quality_log"
+    if ! confirm "Publicar este WAV para Syncthing mesmo assim?"; then
+      warn "WAV mantido apenas localmente: $local_audio_file"
+      warn "Nada foi publicado para Syncthing. Podes rever/apagar/cortar manualmente."
+      pause
+      return 0
+    fi
+  fi
+  publish_wav "$local_audio_file" "$final_audio_file"
+  echo; echo "✅ Gravação terminada, verificada e publicada para Syncthing"
+  echo "   WAV: $final_audio_file"; echo
+  echo "Para transcrever: reunioes transcrever"
+  printf '  PT: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt transcrever-reuniao %q %q\n' "$final_audio_file" "$(md_for_key "$(key_from_path "$final_audio_file")")"
   pause
 }
 
-open_folder() {
-  if has xdg-open; then xdg-open "$REUNIOES_DIR" >/dev/null 2>&1 & disown || true; fi
-  info "$REUNIOES_DIR"
-  pause
+open_folder() { if has xdg-open; then xdg-open "$REUNIOES_DIR" >/dev/null 2>&1 & disown || true; fi; info "$REUNIOES_DIR"; pause; }
+
+remote_session_prefix="reunioes_remote_"
+
+remote_pending_audio() {
+  init_project_dirs
+  shopt -s nullglob
+  local audio key
+  # Preferir WAV publicado por Syncthing. OPUS fica como fallback para casos sem WAV.
+  for audio in "$WAV_DIR"/*.wav "$OPUS_DIR"/*.opus; do
+    [[ -f "$audio" ]] || continue
+    key="$(key_from_path "$audio")"
+    [[ -f "$(md_for_key "$key")" ]] && continue
+    printf '%s\n' "$audio"
+  done | sort
+}
+
+remote_running_sessions() {
+  has tmux || return 0
+  tmux list-sessions -F '#S' 2>/dev/null | grep -E "^${remote_session_prefix}" || true
+}
+
+remote_latest_log() {
+  local latest_link="$LOG_DIR/remote-latest.log"
+  if [[ -e "$latest_link" ]]; then
+    readlink -f "$latest_link" 2>/dev/null || printf '%s\n' "$latest_link"
+    return 0
+  fi
+  find "$LOG_DIR" -maxdepth 1 -type f -name '*.remote-*.log' -printf '%T@\t%p\n' 2>/dev/null | sort -nr | awk -F '\t' 'NR == 1 { print $2 }'
+}
+
+remote_status() {
+  init_project_dirs
+  local pending_count running latest
+  pending_count="$(remote_pending_audio | wc -l)"
+  echo "# Reuniões — estado remoto"
+  echo "Host: $(hostname)"
+  echo "Projeto: $REUNIOES_DIR"
+  echo "Pendentes: $pending_count"
+  echo
+  echo "## Próximos pendentes"
+  if (( pending_count > 0 )); then
+    remote_pending_audio | sed 's#^#- #' | head -10
+  else
+    echo "- nenhum"
+  fi
+  echo
+  echo "## Jobs activos"
+  running="$(remote_running_sessions || true)"
+  if [[ -n "$running" ]]; then printf '%s\n' "$running" | sed 's#^#- #'; else echo "- nenhum"; fi
+  echo
+  latest="$(remote_latest_log || true)"
+  echo "## Último log"
+  if [[ -n "$latest" ]]; then echo "$latest"; else echo "- nenhum"; fi
+}
+
+remote_start() {
+  init_project_dirs
+  if ! has tmux; then
+    err "tmux não está instalado/disponível."
+    return 1
+  fi
+
+  local running audio key session final_output tmp_output log_file archive lang model chunks cmd latest_link
+  running="$(remote_running_sessions || true)"
+  if [[ -n "$running" ]]; then
+    warn "Já existe job remoto activo:"
+    printf '%s\n' "$running" | sed 's#^#  - #'
+    return 1
+  fi
+
+  audio="$(remote_pending_audio | head -1)"
+  if [[ -z "$audio" ]]; then
+    info "Não há áudio pendente para transcrever."
+    return 0
+  fi
+
+  key="$(key_from_path "$audio")"
+  session="${remote_session_prefix}${key}"
+  final_output="$(md_for_key "$key")"
+  tmp_output="$BACKUP_DIR/${key}.remote-$(date +%Y%m%d-%H%M%S).md"
+  log_file="$LOG_DIR/${key}.remote-$(date +%Y%m%d-%H%M%S).log"
+  latest_link="$LOG_DIR/remote-latest.log"
+  lang="${REMOTE_WHISPER_LANGUAGE:-pt}"
+  model="${REMOTE_WHISPER_MODEL:-$WHISPER_MODEL_DEFAULT}"
+  chunks="${REMOTE_CHUNK_SECONDS:-$CHUNK_SECONDS_DEFAULT}"
+  archive="0"
+  [[ "$audio" == *.wav ]] && archive="1"
+
+  ln -sfn "$log_file" "$latest_link"
+  printf -v cmd '%q ' reunioes refazer-job "$audio" "$tmp_output" "$final_output" "$lang" "$model" "$chunks" "$archive"
+  tmux new-session -d -s "$session" "$cmd > $(printf '%q' "$log_file") 2>&1; rc=\$?; echo EXIT:\$rc >> $(printf '%q' "$log_file"); exit \$rc"
+
+  echo "✅ Transcrição lançada em background"
+  echo "Sessão: $session"
+  echo "Áudio: $audio"
+  echo "Destino: $final_output"
+  echo "Log: $log_file"
+}
+
+remote_log() {
+  init_project_dirs
+  local latest lines
+  lines="${1:-80}"
+  latest="$(remote_latest_log || true)"
+  if [[ -z "$latest" || ! -e "$latest" ]]; then
+    warn "Ainda não há log remoto."
+    return 1
+  fi
+  echo "# $latest"
+  tail -n "$lines" "$latest"
 }
 
 show_help() {
-  cat <<'EOF'
+  cat <<EOF
 Workflow recomendado
 
-1. reunioes → Gravar nova reunião
-   - grava diretamente dentro do TUI
-   - cria WAV em ~/Sync/Reunioes
+Projeto: $REUNIOES_DIR
 
-2. reunioes → Transcrever áudio pendente
-   - usa large-v3 por defeito
-   - escolhe pt/en
-   - pode criar OPUS no fim
-   - mantém WAV sempre
+Estrutura:
+  transcricoes/       transcrições Markdown finais
+  audio/wav/          WAV originais/recentes
+  audio/opus/         arquivo áudio comprimido
+  logs/               logs de retranscrição/migração
+  backups/            transcrições antigas, parciais e retries
+  .arquivo-audio.tsv  índice de poupança WAV -> OPUS
 
-3. Se a transcrição falhar ou ficar parcial
-   - usar “Refazer transcrição”
-   - a versão antiga é guardada em backup
-   - pode correr em tmux/background para sobreviver a quedas da sessão
-
-4. Rever transcrição (.md)
-   - usar para resumo Logseq
-
-5. Arquivar WAV para OPUS
-   - só arquiva WAV que já têm MD
-   - não apaga WAV
-
-6. Limpar WAV antigos
-   - só apaga WAV com mais de N dias
-   - só se existir MD + OPUS
-   - pede confirmação explícita
-
-Variáveis úteis
-
-REUNIOES_DIR=~/Sync/Reunioes
-WHISPER_MODEL_DEFAULT=large-v3
-CHUNK_SECONDS_DEFAULT=180
-OPUS_BITRATE=48k
-KEEP_WAV_DAYS=14
-
-Comandos diretos
-
-reunioes gravar
-reunioes status
-reunioes transcrever
-reunioes refazer
-reunioes arquivar
-reunioes arquivar-tudo
-reunioes limpar
-reunioes help
+Comandos:
+  reunioes gravar
+  reunioes status
+  reunioes transcrever
+  reunioes refazer
+  reunioes arquivar
+  reunioes arquivar-tudo
+  reunioes limpar
+  reunioes remote-status  # estado para uso remoto/Telegram
+  reunioes remote-start   # lança próxima transcrição em tmux/background
+  reunioes remote-log     # últimas linhas do log remoto
+  reunioes setup          # garante/cria estrutura; idempotente
+  reunioes help
 EOF
   pause
 }
 
 main_menu() {
+  init_project_dirs
   while true; do
     clear || true
     style "🎙 Reuniões"
-    echo "Pasta: $REUNIOES_DIR"
-    echo
+    echo "Projeto: $REUNIOES_DIR"; echo
     choice="$(choose "Escolhe" \
-      "Gravar nova reunião" \
-      "Ver estado" \
-      "Transcrever áudio pendente" \
-      "Refazer transcrição" \
-      "Arquivar um WAV para OPUS" \
-      "Arquivar todos os WAV elegíveis" \
-      "Limpar WAV antigos" \
-      "Abrir pasta" \
-      "Help" \
-      "Sair")"
+      "Gravar nova reunião" "Ver estado" "Transcrever áudio pendente" "Refazer transcrição" \
+      "Arquivar um WAV para OPUS" "Arquivar todos os WAV elegíveis" "Limpar WAV antigos" \
+      "Abrir pasta" "Help" "Sair")"
     case "$choice" in
       "Gravar nova reunião") record_meeting ;;
       "Ver estado") show_status; pause ;;
@@ -523,6 +715,7 @@ main_menu() {
 cmd="${1:-menu}"
 case "$cmd" in
   menu) main_menu ;;
+  setup) init_project_dirs; info "Estrutura do projeto garantida: $REUNIOES_DIR" ;;
   gravar) record_meeting ;;
   status) show_status ;;
   transcrever) transcribe_pending ;;
@@ -531,10 +724,9 @@ case "$cmd" in
   arquivar) archive_one ;;
   arquivar-tudo) archive_all ;;
   limpar) cleanup_wavs ;;
+  remote-status) remote_status ;;
+  remote-start) remote_start ;;
+  remote-log) shift; remote_log "${1:-80}" ;;
   help|-h|--help) show_help ;;
-  *)
-    err "Comando desconhecido: $cmd"
-    echo "Usa: reunioes help"
-    exit 2
-    ;;
+  *) err "Comando desconhecido: $cmd"; echo "Usa: reunioes help"; exit 2 ;;
 esac

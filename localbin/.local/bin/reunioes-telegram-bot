@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Bot Telegram mínimo para controlar transcrições de reuniões.
+
+Requisitos:
+  TELEGRAM_BOT_TOKEN=123:abc
+  TELEGRAM_ALLOWED_CHAT_IDS=123456789[,987654321]
+
+Opcional:
+  REUNIOES_COMMAND=/home/dias/.local/bin/reunioes
+  TELEGRAM_POLL_TIMEOUT=30
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any
+
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+allowed_raw = os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS") or os.environ.get("TELEGRAM_CHAT_ID", "")
+ALLOWED = {x.strip() for x in allowed_raw.split(",") if x.strip()}
+ALLOW_ALL = os.environ.get("TELEGRAM_ALLOW_ALL", "0") == "1"
+REUNIOES = os.environ.get("REUNIOES_COMMAND", os.path.expanduser("~/.local/bin/reunioes"))
+POLL_TIMEOUT = int(os.environ.get("TELEGRAM_POLL_TIMEOUT", "30"))
+CMD_TIMEOUT = int(os.environ.get("TELEGRAM_CMD_TIMEOUT", "60"))
+MAX_MESSAGE = 3800
+
+
+def die(msg: str) -> None:
+    print(f"ERRO: {msg}", file=sys.stderr, flush=True)
+    raise SystemExit(1)
+
+
+if not TOKEN:
+    die("TELEGRAM_BOT_TOKEN não definido")
+if not os.path.exists(REUNIOES):
+    die(f"reunioes não encontrado: {REUNIOES}")
+
+
+API = f"https://api.telegram.org/bot{TOKEN}/"
+
+
+def api(method: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(API + method, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=POLL_TIMEOUT + 10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        print(f"HTTP {exc.code} em {method}: {body}", file=sys.stderr, flush=True)
+        raise
+
+
+def is_allowed(chat_id: int | str) -> bool:
+    return ALLOW_ALL or str(chat_id) in ALLOWED
+
+
+def keyboard() -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Status", "callback_data": "status"},
+                {"text": "▶️ Transcrever", "callback_data": "start"},
+            ],
+            [
+                {"text": "📄 Último log", "callback_data": "log"},
+                {"text": "🔄 Menu", "callback_data": "menu"},
+            ],
+        ]
+    }
+
+
+def confirm_keyboard() -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Sim", "callback_data": "start_yes"},
+                {"text": "❌ Não", "callback_data": "start_no"},
+            ],
+            [{"text": "📊 Status", "callback_data": "status"}],
+        ]
+    }
+
+
+def send(chat_id: int, text: str, reply_markup: dict[str, Any] | None = None) -> None:
+    chunks = [text[i : i + MAX_MESSAGE] for i in range(0, len(text), MAX_MESSAGE)] or [""]
+    for index, chunk in enumerate(chunks):
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+        if index == len(chunks) - 1 and reply_markup:
+            payload["reply_markup"] = reply_markup
+        api("sendMessage", payload)
+
+
+def answer_callback(callback_id: str, text: str = "") -> None:
+    payload: dict[str, Any] = {"callback_query_id": callback_id}
+    if text:
+        payload["text"] = text[:180]
+    api("answerCallbackQuery", payload)
+
+
+def run_reunioes(*args: str, timeout: int = CMD_TIMEOUT) -> tuple[int, str]:
+    env = os.environ.copy()
+    env.setdefault("TERM", "dumb")
+    proc = subprocess.run(
+        [REUNIOES, *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        env=env,
+    )
+    return proc.returncode, proc.stdout.strip()
+
+
+def menu_text() -> str:
+    return "🎙 Reuniões — ossoarchy\n\nEscolhe uma ação:"
+
+
+def handle_action(chat_id: int, action: str) -> None:
+    if action in {"menu", "start"}:
+        if action == "start":
+            code, out = run_reunioes("remote-status")
+            send(
+                chat_id,
+                f"Vou lançar a próxima transcrição pendente?\n\n{out or '(sem saída)'}",
+                confirm_keyboard(),
+            )
+        else:
+            send(chat_id, menu_text(), keyboard())
+        return
+
+    if action == "status":
+        code, out = run_reunioes("remote-status")
+        prefix = "📊 Status" if code == 0 else f"⚠️ Status saiu com código {code}"
+        send(chat_id, f"{prefix}\n\n{out or '(sem saída)'}", keyboard())
+        return
+
+    if action == "log":
+        code, out = run_reunioes("remote-log", "80")
+        prefix = "📄 Último log" if code == 0 else f"⚠️ Log saiu com código {code}"
+        send(chat_id, f"{prefix}\n\n{out or '(sem saída)'}", keyboard())
+        return
+
+    if action == "start_no":
+        send(chat_id, "Cancelado. Nada foi lançado.", keyboard())
+        return
+
+    if action == "start_yes":
+        code, out = run_reunioes("remote-start")
+        prefix = "✅ Pedido processado" if code == 0 else f"⚠️ Falhou / saiu com código {code}"
+        send(chat_id, f"{prefix}\n\n{out or '(sem saída)'}", keyboard())
+        return
+
+    send(chat_id, f"Ação desconhecida: {action}", keyboard())
+
+
+def handle_update(update: dict[str, Any]) -> None:
+    if "callback_query" in update:
+        cb = update["callback_query"]
+        chat_id = cb["message"]["chat"]["id"]
+        callback_id = cb["id"]
+        if not is_allowed(chat_id):
+            print(f"Chat não autorizado: {chat_id}", flush=True)
+            answer_callback(callback_id, "Não autorizado")
+            return
+        answer_callback(callback_id)
+        handle_action(chat_id, cb.get("data", "menu"))
+        return
+
+    msg = update.get("message") or update.get("edited_message")
+    if not msg:
+        return
+    chat_id = msg["chat"]["id"]
+    if not is_allowed(chat_id):
+        print(f"Chat não autorizado: {chat_id}", flush=True)
+        if ALLOW_ALL:
+            send(chat_id, f"Chat id: {chat_id}")
+        return
+
+    text = (msg.get("text") or "").strip().lower()
+    if text in {"/status", "status"}:
+        handle_action(chat_id, "status")
+    elif text in {"/log", "log"}:
+        handle_action(chat_id, "log")
+    elif text in {"/start", "/menu", "menu", "olá", "ola"}:
+        send(chat_id, menu_text(), keyboard())
+    elif text in {"/transcrever", "transcrever", "start"}:
+        handle_action(chat_id, "start")
+    else:
+        send(chat_id, menu_text(), keyboard())
+
+
+def main() -> None:
+    me = api("getMe")
+    print(f"Bot activo: {me.get('result', {}).get('username', '?')}", flush=True)
+    if not ALLOWED and not ALLOW_ALL:
+        print("Aviso: TELEGRAM_ALLOWED_CHAT_IDS vazio; todos os chats serão recusados.", file=sys.stderr, flush=True)
+
+    offset = 0
+    while True:
+        params = urllib.parse.urlencode({"timeout": POLL_TIMEOUT, "offset": offset}).encode("ascii")
+        try:
+            result = api("getUpdates", {"timeout": POLL_TIMEOUT, "offset": offset})
+            for update in result.get("result", []):
+                offset = max(offset, int(update["update_id"]) + 1)
+                handle_update(update)
+        except Exception as exc:  # manter serviço vivo em falhas temporárias de rede/API
+            print(f"Erro no loop: {exc}", file=sys.stderr, flush=True)
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()

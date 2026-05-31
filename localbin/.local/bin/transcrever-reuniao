@@ -2,21 +2,34 @@
 
 set -euo pipefail
 
+err() { printf '❌ %s\n' "$*" >&2; }
+warn() { printf '⚠️  %s\n' "$*" >&2; }
+info() { printf 'ℹ️  %s\n' "$*"; }
+
 if [[ $# -lt 1 ]]; then
     echo "Uso: transcrever-reuniao /caminho/para/audio.wav [ficheiro_saida.md]" >&2
-    echo "Variaveis: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt CHUNK_SECONDS=180 TRIM_SILENCE=1 ARCHIVE_OPUS=0" >&2
+    echo "Variáveis: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt CHUNK_SECONDS=180 TRIM_SILENCE=1 ARCHIVE_OPUS=0" >&2
+    echo "           FASTER_WHISPER_PYTHON=... TRANSCRICOES_DIR=... OPUS_DIR=... ARCHIVE_INDEX=..." >&2
+    echo "           AUDIO_STABLE_CHECKS=2 AUDIO_STABLE_INTERVAL=3" >&2
     exit 1
 fi
 
 AUDIO_FILE="$1"
 if [[ ! -f "$AUDIO_FILE" ]]; then
-    echo "Audio nao encontrado: $AUDIO_FILE" >&2
+    err "Áudio não encontrado: $AUDIO_FILE"
     exit 1
 fi
 
 BASENAME=$(basename "$AUDIO_FILE")
-DEFAULT_OUTPUT="${AUDIO_FILE%.*}.md"
-OUTPUT_FILE="${2:-$DEFAULT_OUTPUT}"
+AUDIO_STEM="${BASENAME%.*}"
+TRANSCRICOES_DIR="${TRANSCRICOES_DIR:-}"
+if [[ $# -ge 2 ]]; then
+    OUTPUT_FILE="$2"
+elif [[ -n "$TRANSCRICOES_DIR" ]]; then
+    OUTPUT_FILE="$TRANSCRICOES_DIR/${AUDIO_STEM}.md"
+else
+    OUTPUT_FILE="${AUDIO_FILE%.*}.md"
+fi
 
 WHISPER_MODEL="${WHISPER_MODEL:-large-v3}"
 WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-pt}"
@@ -26,15 +39,185 @@ TRIM_THRESHOLD="${TRIM_THRESHOLD:--45dB}"
 TRIM_DURATION="${TRIM_DURATION:-0.5}"
 ARCHIVE_OPUS="${ARCHIVE_OPUS:-0}"
 OPUS_BITRATE="${OPUS_BITRATE:-48k}"
+AUDIO_STABLE_CHECKS="${AUDIO_STABLE_CHECKS:-2}"
+AUDIO_STABLE_INTERVAL="${AUDIO_STABLE_INTERVAL:-3}"
+
+if [[ -n "${OPUS_DIR:-}" ]]; then
+    OPUS_DIR="$OPUS_DIR"
+else
+    AUDIO_PARENT="$(dirname "$AUDIO_FILE")"
+    if [[ "$(basename "$AUDIO_PARENT")" == "wav" && "$(basename "$(dirname "$AUDIO_PARENT")")" == "audio" ]]; then
+        OPUS_DIR="$(dirname "$AUDIO_PARENT")/opus"
+    else
+        OPUS_DIR="$AUDIO_PARENT"
+    fi
+fi
+
+if [[ -n "${ARCHIVE_INDEX:-}" ]]; then
+    ARCHIVE_INDEX="$ARCHIVE_INDEX"
+else
+    OUTPUT_PARENT="$(dirname "$OUTPUT_FILE")"
+    if [[ "$(basename "$OUTPUT_PARENT")" == "transcricoes" ]]; then
+        ARCHIVE_INDEX="$(dirname "$OUTPUT_PARENT")/.arquivo-audio.tsv"
+    else
+        ARCHIVE_INDEX="$OUTPUT_PARENT/.arquivo-audio.tsv"
+    fi
+fi
+
 CHUNK_DIR=$(mktemp -d /tmp/transcrever_reuniao_chunks_XXXXXX)
 TRIMMED_AUDIO="$CHUNK_DIR/trimmed_input.wav"
 AUDIO_FOR_TRANSCRIBE="$AUDIO_FILE"
-PYTHON_BIN="/home/dias/.local/share/pipx/venvs/faster-whisper/bin/python"
 
 cleanup() {
     rm -rf "$CHUNK_DIR"
 }
 trap cleanup EXIT
+
+file_base() {
+    local f="$1"
+    printf '%s' "${f%.*}"
+}
+
+file_size() {
+    stat -c '%s' "$1" 2>/dev/null || printf '0'
+}
+
+human_size() {
+    if command -v numfmt >/dev/null 2>&1; then numfmt --to=iec --suffix=B "$1"; else printf '%sB' "$1"; fi
+}
+
+ensure_archive_index() {
+    mkdir -p "$(dirname "$ARCHIVE_INDEX")"
+    if [[ ! -f "$ARCHIVE_INDEX" ]]; then
+        printf 'base\twav_bytes\topus_bytes\tsaved_bytes\topus_created_at\twav_removed_at\n' > "$ARCHIVE_INDEX"
+    fi
+}
+
+archive_upsert_unlocked() {
+    local base="$1" wav_bytes="$2" opus_bytes="$3" saved_bytes="$4" opus_created_at="$5" wav_removed_at="${6:-}"
+    local tmp
+    tmp="$(mktemp)"
+    awk -F '\t' -v OFS='\t' \
+        -v base="$base" -v wav="$wav_bytes" -v opus="$opus_bytes" -v saved="$saved_bytes" \
+        -v created="$opus_created_at" -v removed="$wav_removed_at" '
+          NR == 1 { print; next }
+          $1 == base {
+            if (removed == "" && $6 != "") removed = $6
+            print base, wav, opus, saved, created, removed
+            found = 1
+            next
+          }
+          { print }
+          END { if (!found) print base, wav, opus, saved, created, removed }
+        ' "$ARCHIVE_INDEX" > "$tmp"
+    mv -- "$tmp" "$ARCHIVE_INDEX"
+}
+
+archive_upsert() {
+    local base="$1" wav_bytes="$2" opus_bytes="$3" saved_bytes="$4" opus_created_at="$5" wav_removed_at="${6:-}"
+    ensure_archive_index
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock -x 9
+            archive_upsert_unlocked "$base" "$wav_bytes" "$opus_bytes" "$saved_bytes" "$opus_created_at" "$wav_removed_at"
+        ) 9>"$ARCHIVE_INDEX.lock"
+    else
+        archive_upsert_unlocked "$base" "$wav_bytes" "$opus_bytes" "$saved_bytes" "$opus_created_at" "$wav_removed_at"
+    fi
+}
+
+archive_record_opus() {
+    local wav="$1" opus="$2" base wav_bytes opus_bytes saved_bytes
+    [[ -s "$wav" && -s "$opus" ]] || return 0
+    base="$(basename "$(file_base "$wav")")"
+    wav_bytes="$(file_size "$wav")"
+    opus_bytes="$(file_size "$opus")"
+    saved_bytes=0
+    if (( wav_bytes > opus_bytes )); then
+        saved_bytes=$((wav_bytes - opus_bytes))
+    fi
+    archive_upsert "$base" "$wav_bytes" "$opus_bytes" "$saved_bytes" "$(date --iso-8601=seconds)" ""
+    info "Poupança registada: $(human_size "$saved_bytes") em $ARCHIVE_INDEX"
+}
+
+python_can_import() {
+    local candidate="$1"
+    [[ -x "$candidate" ]] || return 1
+    "$candidate" -c 'import faster_whisper' >/dev/null 2>&1
+}
+
+find_python_bin() {
+    local candidates=() candidate resolved
+    if [[ -n "${FASTER_WHISPER_PYTHON:-}" ]]; then
+        candidates+=("$FASTER_WHISPER_PYTHON")
+    fi
+    candidates+=(
+        "$HOME/.local/share/pipx/venvs/faster-whisper/bin/python"
+        "$HOME/.local/pipx/venvs/faster-whisper/bin/python"
+        "python3"
+        "python"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ "$candidate" == */* ]]; then
+            resolved="$candidate"
+        else
+            resolved="$(command -v "$candidate" 2>/dev/null || true)"
+        fi
+        [[ -n "$resolved" ]] || continue
+        if python_can_import "$resolved"; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    done
+
+    err "Não encontrei Python com módulo faster_whisper. Define FASTER_WHISPER_PYTHON=/caminho/python ou instala via pipx."
+    return 1
+}
+
+wait_for_stable_audio() {
+    local file="$1" checks="$AUDIO_STABLE_CHECKS" interval="$AUDIO_STABLE_INTERVAL" previous current i
+    [[ "$checks" =~ ^[0-9]+$ ]] || checks=2
+    [[ "$interval" =~ ^[0-9]+$ ]] || interval=3
+
+    if [[ "$checks" -le 0 ]]; then
+        return 0
+    fi
+    if [[ ! -s "$file" ]]; then
+        err "Áudio vazio/inexistente: $file"
+        return 1
+    fi
+
+    previous="$(file_size "$file")"
+    for ((i = 1; i <= checks; i++)); do
+        sleep "$interval"
+        current="$(file_size "$file")"
+        if [[ "$current" != "$previous" ]]; then
+            info "Áudio ainda a estabilizar: ${previous} -> ${current} bytes"
+            previous="$current"
+            i=0
+        fi
+    done
+    info "Áudio estável: $(human_size "$previous")"
+}
+
+validate_audio_readable() {
+    local file="$1" duration
+    if command -v ffprobe >/dev/null 2>&1; then
+        duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$file" 2>/dev/null || true)"
+        if [[ -z "$duration" ]] || ! awk -v d="$duration" 'BEGIN { exit !(d > 0) }'; then
+            err "Áudio não parece legível ou tem duração zero: $file"
+            return 1
+        fi
+        info "Duração detectada: ${duration}s"
+    fi
+}
+
+mkdir -p "$(dirname "$OUTPUT_FILE")"
+PYTHON_BIN="$(find_python_bin)"
+
+wait_for_stable_audio "$AUDIO_FILE"
+validate_audio_readable "$AUDIO_FILE"
 
 if [[ "$TRIM_SILENCE" == "1" ]]; then
     echo "A cortar silêncio no início/fim..."
@@ -44,7 +227,7 @@ if [[ "$TRIM_SILENCE" == "1" ]]; then
     if [[ -s "$TRIMMED_AUDIO" ]]; then
         AUDIO_FOR_TRANSCRIBE="$TRIMMED_AUDIO"
     else
-        echo "Aviso: trim gerou ficheiro vazio; sigo com o áudio original." >&2
+        warn "Trim gerou ficheiro vazio; sigo com o áudio original."
     fi
 fi
 
@@ -54,22 +237,26 @@ ffmpeg -hide_banner -loglevel error -i "$AUDIO_FOR_TRANSCRIBE" \
     "$CHUNK_DIR/chunk_%03d.wav"
 
 echo "A transcrever..."
+echo "  Python        : ${PYTHON_BIN}"
 echo "  Modelo pedido : ${WHISPER_MODEL}"
 echo "  Lingua        : ${WHISPER_LANGUAGE}"
 echo "  Blocos        : ${CHUNK_SECONDS}s"
 echo "  Trim silêncio : ${TRIM_SILENCE} (threshold ${TRIM_THRESHOLD}, duração ${TRIM_DURATION}s)"
-"$PYTHON_BIN" - <<EOF
+
+"$PYTHON_BIN" - "$AUDIO_FILE" "$OUTPUT_FILE" "$CHUNK_SECONDS" "$CHUNK_DIR" <<'PY'
 import glob
 import os
+import sys
 import time
 from faster_whisper import WhisperModel
 
-audio_file = ${AUDIO_FILE@Q}
-outfile = ${OUTPUT_FILE@Q}
-chunk_seconds = int(${CHUNK_SECONDS@Q})
-requested_model = os.environ.get("WHISPER_MODEL", ${WHISPER_MODEL@Q})
-language = os.environ.get("WHISPER_LANGUAGE", ${WHISPER_LANGUAGE@Q})
-chunk_files = sorted(glob.glob(${CHUNK_DIR@Q} + "/chunk_*.wav"))
+audio_file = sys.argv[1]
+outfile = sys.argv[2]
+chunk_seconds = int(sys.argv[3])
+chunk_dir = sys.argv[4]
+requested_model = os.environ.get("WHISPER_MODEL", "large-v3")
+language = os.environ.get("WHISPER_LANGUAGE", "pt") or None
+chunk_files = sorted(glob.glob(os.path.join(chunk_dir, "chunk_*.wav")))
 
 candidates = []
 for candidate in (requested_model, "large-v3", "medium"):
@@ -105,8 +292,8 @@ def fmt_time(seconds):
 with open(outfile, "w", encoding="utf-8", buffering=1) as f:
     total_chunks = len(chunk_files)
     started_at = time.time()
-    f.write(f"# Reunião {os.path.basename(audio_file)}\\n\\n")
-    f.write(f"_Modelo: {active_model}, língua: {language}, blocos de {chunk_seconds} segundos_\\n\\n")
+    f.write(f"# Reunião {os.path.basename(audio_file)}\n\n")
+    f.write(f"_Modelo: {active_model}, língua: {language or 'auto'}, blocos de {chunk_seconds} segundos_\n\n")
     f.flush()
 
     for index, chunk_file in enumerate(chunk_files):
@@ -127,7 +314,7 @@ with open(outfile, "w", encoding="utf-8", buffering=1) as f:
         for segment in segments:
             text = segment.text.strip()
             if text:
-                f.write(f"[{fmt_time(segment.start + offset)}] {text}\\n")
+                f.write(f"[{fmt_time(segment.start + offset)}] {text}\n")
 
         f.flush()
         elapsed = time.time() - started_at
@@ -136,13 +323,19 @@ with open(outfile, "w", encoding="utf-8", buffering=1) as f:
         print(f"  -> concluído em {time.time() - chunk_started:.1f}s | ETA {fmt_time(eta)}", flush=True)
 
 print(f"OK: {outfile}")
-EOF
+PY
 
 if [[ "$ARCHIVE_OPUS" == "1" ]]; then
-    OPUS_FILE="${AUDIO_FILE%.*}.opus"
-    echo "A criar arquivo Opus..."
-    ffmpeg -hide_banner -loglevel error -y -i "$AUDIO_FILE" \
-        -c:a libopus -b:a "$OPUS_BITRATE" -vbr on -compression_level 10 -ac 1 \
-        "$OPUS_FILE"
-    echo "OK: $OPUS_FILE"
+    if [[ "$AUDIO_FILE" == *.opus ]]; then
+        warn "ARCHIVE_OPUS=1 ignorado porque a origem já é OPUS: $AUDIO_FILE"
+    else
+        mkdir -p "$OPUS_DIR"
+        OPUS_FILE="$OPUS_DIR/${AUDIO_STEM}.opus"
+        echo "A criar arquivo Opus..."
+        ffmpeg -hide_banner -loglevel error -y -i "$AUDIO_FILE" \
+            -c:a libopus -b:a "$OPUS_BITRATE" -vbr on -compression_level 10 -ac 1 \
+            "$OPUS_FILE"
+        archive_record_opus "$AUDIO_FILE" "$OPUS_FILE"
+        echo "OK: $OPUS_FILE"
+    fi
 fi

@@ -4,6 +4,24 @@ alias c='clear'           # omarchy tem c='opencode'
 alias o='opencode'
 alias phpshell='/usr/bin/php -a'
 
+# SSH via Kitty quando faz sentido; caso contrário usa SSH normal.
+# Uso: s host / s user@host / s -p 2222 host
+s() {
+  local omarchy_terminal=""
+
+  if command -v omarchy >/dev/null 2>&1; then
+    omarchy_terminal="$(omarchy default terminal 2>/dev/null)"
+  fi
+
+  if command -v kitten >/dev/null 2>&1 \
+    && [[ "$omarchy_terminal" == "kitty" ]] \
+    && [[ -n "${KITTY_WINDOW_ID:-}" || "${TERM_PROGRAM:-}" == "kitty" || "${TERM:-}" == "xterm-kitty" ]]; then
+    kitten ssh "$@"
+  else
+    ssh "$@"
+  fi
+}
+
 unalias art 2>/dev/null
 unalias sail 2>/dev/null
 art() {
