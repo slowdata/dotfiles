@@ -219,7 +219,8 @@ Scripts globais devem viver em:
 
 Exemplos atuais:
 - `reunioes` — TUI para gravar/transcrever/arquivar reuniões
-- `transcrever-reuniao`
+- `podcasts` — TUI para transcrever podcasts e criar notas no Obsidian
+- `transcrever-audio` — motor genérico partilhado por `reunioes`/`podcasts`
 - `dotfiles-stow-hypr`
 - scripts Todoist
 
@@ -227,7 +228,7 @@ Exemplos atuais:
 Fazer backup e trocar por symlink do repo:
 
 ```bash
-mv ~/.local/bin/transcrever-reuniao ~/.local/bin/transcrever-reuniao.bak 2>/dev/null || true
+mv ~/.local/bin/transcrever-audio ~/.local/bin/transcrever-audio.bak 2>/dev/null || true
 
 # Removido: a gravação passou a viver no TUI `reunioes`
 rm -f ~/.local/bin/gravar-reuniao
@@ -238,7 +239,7 @@ stow localbin
 
 ### Verificar
 ```bash
-ls -l ~/.local/bin/reunioes ~/.local/bin/transcrever-reuniao
+ls -l ~/.local/bin/reunioes ~/.local/bin/podcasts ~/.local/bin/transcrever-audio
 command -v gravar-reuniao || echo "gravar-reuniao removido"
 ```
 
@@ -360,7 +361,7 @@ git -C ~/dotfiles status --short
 
 ### Scripts em symlink
 ```bash
-ls -l ~/.local/bin/reunioes ~/.local/bin/transcrever-reuniao
+ls -l ~/.local/bin/reunioes ~/.local/bin/podcasts ~/.local/bin/transcrever-audio
 command -v gravar-reuniao || echo "gravar-reuniao removido"
 ```
 

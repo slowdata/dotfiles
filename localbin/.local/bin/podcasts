@@ -1,0 +1,948 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# podcasts — TUI para transcrever episódios de podcast e destilar notas no Obsidian.
+# Motor de transcrição: transcrever-audio (reaproveitado, incl. arquivo OPUS).
+# Estilo/ helpers clonados de `reunioes`.
+
+PODCASTS_ENV="${PODCASTS_ENV:-$HOME/.config/podcasts/env}"
+if [[ -f "$PODCASTS_ENV" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PODCASTS_ENV"
+  set +a
+fi
+
+# Área scratch local (não vai para o vault nem para Syncthing).
+PODCASTS_DIR="${PODCASTS_DIR:-$HOME/.local/state/podcasts}"
+TRANSCRICOES_DIR="${TRANSCRICOES_DIR:-$PODCASTS_DIR/transcricoes}"
+AUDIO_DIR="${AUDIO_DIR:-$PODCASTS_DIR/audio}"
+MP3_DIR="${MP3_DIR:-$AUDIO_DIR/mp3}"
+OPUS_DIR="${OPUS_DIR:-$AUDIO_DIR/opus}"
+LOG_DIR="${LOG_DIR:-$PODCASTS_DIR/logs}"
+BACKUP_DIR="${BACKUP_DIR:-$PODCASTS_DIR/backups}"
+ARCHIVE_INDEX="${ARCHIVE_INDEX:-$PODCASTS_DIR/.arquivo-audio.tsv}"
+
+# Destino da nota DESTILADA (final), no vault Obsidian.
+VAULT_DIR="${VAULT_DIR:-$HOME/Sync/Obsidian/Personal}"
+NOTES_DIR="${NOTES_DIR:-$VAULT_DIR/Reference}"
+
+# Feeds RSS guardados (name<TAB>url por linha).
+FEEDS_FILE="${FEEDS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/podcasts/feeds.tsv}"
+
+# Destilação com IA (claude CLI). Modelo vazio = default do Claude Code.
+PODCASTS_AI_MODEL="${PODCASTS_AI_MODEL:-}"
+PODCASTS_NOTE_LANG="${PODCASTS_NOTE_LANG:-português de Portugal}"
+
+WHISPER_MODEL_DEFAULT="${WHISPER_MODEL_DEFAULT:-large-v3}"
+# Em podcasts, "auto" é o default certo: há feeds em PT/EN misturados.
+WHISPER_LANGUAGE_DEFAULT="${WHISPER_LANGUAGE_DEFAULT:-auto}"
+CHUNK_SECONDS_DEFAULT="${CHUNK_SECONDS_DEFAULT:-180}"
+OPUS_BITRATE="${OPUS_BITRATE:-48k}"
+
+has() { command -v "$1" >/dev/null 2>&1; }
+use_gum() { has gum && [[ -t 0 && -t 1 ]] && ( : </dev/tty ) 2>/dev/null; }
+
+style() {
+  if use_gum; then
+    gum style --border rounded --padding "0 2" --margin "0 0 1 0" --bold "$@"
+  else
+    printf '== %s ==\n' "$*"
+  fi
+}
+info() { printf 'ℹ️  %s\n' "$*"; }
+warn() { printf '⚠️  %s\n' "$*"; }
+err() { printf '❌ %s\n' "$*" >&2; }
+
+pause() {
+  echo
+  if ( : </dev/tty ) 2>/dev/null; then read -rp "Enter para continuar..." _ </dev/tty || true
+  elif [[ -t 0 ]]; then read -rp "Enter para continuar..." _ || true; fi
+}
+
+confirm() {
+  local prompt="$1" answer
+  if use_gum; then gum confirm "$prompt" </dev/tty >/dev/tty
+  else
+    if ( : </dev/tty ) 2>/dev/null; then read -rp "$prompt [y/N] " answer </dev/tty
+    else read -rp "$prompt [y/N] " answer; fi
+    [[ "${answer,,}" == "y" || "${answer,,}" == "yes" || "${answer,,}" == "s" || "${answer,,}" == "sim" ]]
+  fi
+}
+
+choose() {
+  local header="$1"; shift
+  if use_gum; then gum choose --header "$header" --height 15 "$@" </dev/tty
+  else
+    local opt
+    echo "$header" >/dev/tty
+    select opt in "$@"; do [[ -n "${opt:-}" ]] && { printf '%s\n' "$opt"; return 0; }; done </dev/tty
+  fi
+}
+
+input() {
+  local prompt="$1" default="${2:-}" value
+  if use_gum; then gum input --prompt "$prompt " --value "$default" </dev/tty
+  else
+    if ( : </dev/tty ) 2>/dev/null; then read -rp "$prompt [$default] " value </dev/tty
+    else read -rp "$prompt [$default] " value; fi
+    printf '%s\n' "${value:-$default}"
+  fi
+}
+
+init_project_dirs() {
+  mkdir -p "$TRANSCRICOES_DIR" "$MP3_DIR" "$OPUS_DIR" "$LOG_DIR" "$BACKUP_DIR"
+  ensure_archive_index
+}
+
+file_base() { local f="$1"; printf '%s' "${f%.*}"; }
+file_size() { stat -c '%s' "$1" 2>/dev/null || printf '0'; }
+human_size() { if has numfmt; then numfmt --to=iec --suffix=B "$1"; else printf '%sB' "$1"; fi; }
+key_from_path() { basename "$(file_base "$1")"; }
+md_for_key() { printf '%s/%s.md' "$TRANSCRICOES_DIR" "$1"; }
+mp3_for_key() { printf '%s/%s.mp3' "$MP3_DIR" "$1"; }
+opus_for_key() { printf '%s/%s.opus' "$OPUS_DIR" "$1"; }
+
+ensure_archive_index() {
+  mkdir -p "$(dirname "$ARCHIVE_INDEX")"
+  if [[ ! -f "$ARCHIVE_INDEX" ]]; then
+    printf 'base\twav_bytes\topus_bytes\tsaved_bytes\topus_created_at\twav_removed_at\n' > "$ARCHIVE_INDEX"
+  fi
+}
+
+archive_upsert_unlocked() {
+  local base="$1" wav_bytes="$2" opus_bytes="$3" saved_bytes="$4" opus_created_at="$5" wav_removed_at="${6:-}" tmp
+  tmp="$(mktemp)"
+  awk -F '\t' -v OFS='\t' \
+    -v base="$base" -v wav="$wav_bytes" -v opus="$opus_bytes" -v saved="$saved_bytes" \
+    -v created="$opus_created_at" -v removed="$wav_removed_at" '
+      NR == 1 { print; next }
+      $1 == base {
+        if (removed == "" && $6 != "") removed = $6
+        print base, wav, opus, saved, created, removed
+        found = 1
+        next
+      }
+      { print }
+      END { if (!found) print base, wav, opus, saved, created, removed }
+    ' "$ARCHIVE_INDEX" > "$tmp"
+  mv -- "$tmp" "$ARCHIVE_INDEX"
+}
+
+archive_upsert() {
+  ensure_archive_index
+  if has flock; then
+    (
+      flock -x 9
+      archive_upsert_unlocked "$@"
+    ) 9>"$ARCHIVE_INDEX.lock"
+  else
+    archive_upsert_unlocked "$@"
+  fi
+}
+
+archive_record_opus() {
+  local audio="$1" opus="$2" base audio_bytes opus_bytes saved_bytes
+  [[ -s "$audio" && -s "$opus" ]] || return 0
+  base="$(key_from_path "$audio")"
+  audio_bytes="$(file_size "$audio")"
+  opus_bytes="$(file_size "$opus")"
+  saved_bytes=0
+  if (( audio_bytes > opus_bytes )); then saved_bytes=$((audio_bytes - opus_bytes)); fi
+  archive_upsert "$base" "$audio_bytes" "$opus_bytes" "$saved_bytes" "$(date --iso-8601=seconds)" ""
+  info "Poupança registada: $(human_size "$saved_bytes") em $ARCHIVE_INDEX"
+}
+
+slugify() {
+  echo "$1" \
+    | iconv -t ascii//TRANSLIT 2>/dev/null \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr -cs '[:alnum:]' '-' \
+    | sed 's/^-//; s/-$//' \
+    | cut -c1-60
+}
+
+make_key() {
+  local title="$1" slug base key n
+  slug="$(slugify "$title")"
+  [[ -n "$slug" ]] || slug="episodio"
+  base="pod_$(date +%Y-%m-%d)_$slug"
+  key="$base"
+  n=2
+  while [[ -e "$(md_for_key "$key")" || -e "$(mp3_for_key "$key")" || -e "$(opus_for_key "$key")" ]]; do
+    key="${base}-${n}"
+    n=$((n + 1))
+  done
+  printf '%s' "$key"
+}
+
+choose_language() {
+  local opts=() seen="" opt lang
+  for opt in "$WHISPER_LANGUAGE_DEFAULT" "auto" "pt" "en" "es" "fr"; do
+    [[ -n "$opt" ]] || continue
+    [[ " $seen " == *" $opt "* ]] && continue
+    opts+=("$opt")
+    seen+=" $opt"
+  done
+  lang="$(choose "Língua" "${opts[@]}")" || return 1
+  [[ "$lang" == "auto" ]] && lang=""
+  printf '%s' "$lang"
+}
+
+title_from_md() {
+  local md="$1"
+  [[ -f "$md" ]] || return 0
+  sed -n 's/^# //p' "$md" | head -1
+}
+
+source_from_md() {
+  local md="$1"
+  [[ -f "$md" ]] || return 0
+  sed -n 's/^_Fonte: \(.*\) · transcrito .*_$/\1/p' "$md" | head -1
+}
+
+last_timestamp_seconds() {
+  local md="$1"
+  awk '
+    /^\[[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?\]/ {
+      ts = $1
+      gsub(/[\[\]]/, "", ts)
+      n = split(ts, a, ":")
+      if (n == 2) last = (a[1] * 60) + a[2]
+      else if (n == 3) last = (a[1] * 3600) + (a[2] * 60) + a[3]
+    }
+    END { if (last != "") print int(last); else print 0 }
+  ' "$md" 2>/dev/null || printf '0'
+}
+
+audio_duration_seconds() {
+  local audio="$1" duration
+  if ! has ffprobe; then printf '0'; return 0; fi
+  duration="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$audio" 2>/dev/null || true)"
+  awk -v d="$duration" 'BEGIN { if (d > 0) printf "%d", d; else printf "0" }'
+}
+
+warn_transcription_coverage() {
+  local audio="$1" md="$2" duration last gap margin
+  duration="$(audio_duration_seconds "$audio")"
+  last="$(last_timestamp_seconds "$md")"
+  margin="${PODCASTS_COVERAGE_MARGIN_SECONDS:-240}"
+  [[ "$duration" =~ ^[0-9]+$ && "$last" =~ ^[0-9]+$ && "$margin" =~ ^[0-9]+$ ]] || return 0
+  (( duration > 0 && last > 0 )) || return 0
+  gap=$((duration - last))
+  if (( gap > margin )); then
+    warn "A transcrição parece curta: áudio $(printf '%02d:%02d:%02d' $((duration/3600)) $(((duration%3600)/60)) $((duration%60))) vs último timestamp $(printf '%02d:%02d:%02d' $((last/3600)) $(((last%3600)/60)) $((last%60)))."
+    warn "Sugestão: refazer transcrição a partir do áudio arquivado/MP3."
+  fi
+}
+
+# --- Transcrição (reaproveita transcrever-audio) ---------------------------
+
+run_transcription() {
+  # $1 audio  $2 output.md  $3 lang  $4 model  $5 chunks  $6 archive_opus(0/1)
+  local audio="$1" output="$2" lang="$3" model="$4" chunks="$5" archive="$6"
+  mkdir -p "$(dirname "$output")"
+  if [[ -n "$lang" ]]; then
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" \
+      WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" \
+      ARCHIVE_OPUS="$archive" TRIM_SILENCE=0 transcrever-audio "$audio" "$output"
+  else
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" \
+      WHISPER_MODEL="$model" WHISPER_LANGUAGE="" CHUNK_SECONDS="$chunks" \
+      ARCHIVE_OPUS="$archive" TRIM_SILENCE=0 transcrever-audio "$audio" "$output"
+  fi
+}
+
+# Reescreve o cabeçalho bruto do motor para o formato de podcast.
+fix_header() {
+  local md="$1" title="$2" source="$3"
+  [[ -f "$md" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  {
+    printf '# %s\n\n' "$title"
+    printf '_Fonte: %s · transcrito %s_\n\n' "${source:-?}" "$(date +%F)"
+    awk 'BEGIN { body = 0 } /^\[[0-9][0-9]:[0-9][0-9](:[0-9][0-9])?\]/ { body = 1 } body { print }' "$md"
+  } > "$tmp"
+  mv -- "$tmp" "$md"
+}
+
+# --- RSS / feeds / download --------------------------------------------------
+# Muitos hosts de podcast (transistor.fm, simplecast, libsyn...) NÃO são
+# suportados diretamente pelo yt-dlp, mas expõem o mp3 no <enclosure> do RSS
+# ou no meta og:audio da página do episódio. Estratégia em camadas.
+
+# Lê um feed RSS e imprime, por linha:
+#   título<TAB>audio_url<TAB>episode_url<TAB>pub_date
+feed_episodes() {
+  local feed="$1"
+  curl -sL --max-time 60 "$feed" 2>/dev/null | python3 -c '
+import sys, xml.etree.ElementTree as ET
+
+def clean(value):
+    return (value or "").strip().replace("\t", " ").replace("\n", " ")
+
+try:
+    root = ET.fromstring(sys.stdin.buffer.read())
+except Exception:
+    sys.exit(0)
+
+for it in root.findall(".//item"):
+    title = clean(it.findtext("title") or "?")
+    link = clean(it.findtext("link"))
+    pub = clean(it.findtext("pubDate"))
+    enc = it.find("enclosure")
+    audio = clean(enc.get("url") if enc is not None else "")
+    if audio:
+        print(f"{title}\t{audio}\t{link}\t{pub}")
+'
+}
+
+# Extrai um áudio direto do HTML de uma página de episódio (fallback).
+media_url_from_page() {
+  local url="$1"
+  python3 - "$url" <<'PY'
+import html, re, sys, urllib.request
+url = sys.argv[1]
+try:
+    req = urllib.request.Request(url, headers={"User-Agent": "podcasts/1.0"})
+    page = urllib.request.urlopen(req, timeout=45).read().decode("utf-8", "ignore")
+except Exception:
+    sys.exit(0)
+
+for tag in re.findall(r"<meta\b[^>]*>", page, flags=re.I):
+    attrs = {k.lower(): html.unescape(v) for k, v in re.findall(r"([a-zA-Z_:.-]+)=[\"']([^\"']*)[\"']", tag)}
+    prop = (attrs.get("property") or attrs.get("name") or "").lower()
+    if prop in {"og:audio", "og:audio:url", "twitter:player:stream"} and attrs.get("content"):
+        print(attrs["content"])
+        sys.exit(0)
+
+match = re.search(r"https://[^\s\"'<>]+?\.(?:mp3|m4a|aac|ogg|opus)(?:\?[^\s\"'<>]*)?", page, flags=re.I)
+if match:
+    print(html.unescape(match.group(0)))
+PY
+}
+
+is_direct_audio_url() {
+  [[ "$1" =~ \.(mp3|m4a|aac|ogg|opus)(\?|#|$) ]]
+}
+
+download_media_as_mp3() {
+  local media="$1" mp3="$2" srcf
+  mkdir -p "$(dirname "$mp3")"
+  if [[ "$media" =~ \.mp3(\?|#|$) ]]; then
+    curl -L --fail --retry 2 -o "$mp3" "$media"
+  else
+    srcf="$(mktemp "$MP3_DIR/download.XXXXXX")"
+    curl -L --fail --retry 2 -o "$srcf" "$media" || { rm -f -- "$srcf"; return 1; }
+    ffmpeg -hide_banner -loglevel error -y -i "$srcf" -c:a libmp3lame -q:a 4 "$mp3"
+    rm -f -- "$srcf"
+  fi
+}
+
+# Picker com pesquisa: gum filter (escreves p/ filtrar) ou choose como fallback.
+pick_title() {
+  local header="$1"; shift
+  if use_gum; then
+    printf '%s\n' "$@" | gum filter --height 20 --placeholder "$header" --prompt "🔎 "
+  else
+    choose "$header" "$@"
+  fi
+}
+
+# Escolhe um feed guardado ou cola um novo (opcionalmente guarda-o).
+choose_feed() {
+  local opts=() name url choice
+  if [[ -f "$FEEDS_FILE" ]]; then
+    while IFS=$'\t' read -r name url; do [[ -n "$name" ]] && opts+=("$name"); done < "$FEEDS_FILE"
+  fi
+  opts+=("➕ Novo feed (colar URL)")
+  choice="$(choose "Feed RSS" "${opts[@]}")" || return 1
+  if [[ "$choice" == "➕ Novo feed (colar URL)" ]]; then
+    url="$(input "URL do RSS feed" "")"
+    [[ -n "$url" ]] || return 1
+    if confirm "Guardar este feed para reusar?"; then
+      name="$(input "Nome curto do feed" "$url")"
+      mkdir -p "$(dirname "$FEEDS_FILE")"
+      printf '%s\t%s\n' "$name" "$url" >> "$FEEDS_FILE"
+    fi
+    printf '%s' "$url"
+  else
+    awk -F'\t' -v n="$choice" '$1 == n { print $2; exit }' "$FEEDS_FILE"
+  fi
+}
+
+# --- Destilação com IA (claude CLI) ------------------------------------------
+# A transcrição crua não serve sozinha. Aqui um LLM lê-a e produz a nota final:
+# resumo, pontos-chave, checklist acionável e citações com timestamp.
+
+choose_folder() {
+  local dirs=() ordered=() dir name default_folder seen=""
+  if [[ -d "$VAULT_DIR" ]]; then
+    while IFS= read -r dir; do
+      name="$(basename "$dir")"
+      case "$name" in .obsidian|Templates) continue ;; esac
+      dirs+=("$name")
+    done < <(find "$VAULT_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+  fi
+  if (( ${#dirs[@]} == 0 )); then
+    dirs=(Reference Sports Recipes Home Books Resources Dev Finance Family Work)
+  fi
+  if [[ "$NOTES_DIR" == "$VAULT_DIR/"* ]]; then
+    default_folder="${NOTES_DIR#$VAULT_DIR/}"
+    default_folder="${default_folder%%/*}"
+  else
+    default_folder="Reference"
+  fi
+  for name in "$default_folder" "${dirs[@]}"; do
+    [[ -n "$name" && " $seen " != *" $name "* ]] || continue
+    ordered+=("$name")
+    seen+=" $name"
+  done
+  choose "Pasta no vault" "${ordered[@]}"
+}
+
+# ai_distill <transcricao.md> <titulo> <fonte> <nota_destino.md>
+ai_distill() {
+  local md="$1" title="$2" source="$3" note="$4" sys rc claude_cmd
+  [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
+  has claude || { err "claude CLI não encontrado."; return 1; }
+  mkdir -p "$(dirname "$note")"
+  info "A destilar com IA (pode demorar ~15-40s)..."
+  sys="És editor de notas de conhecimento permanente. Transformas transcrições de podcast (têm timestamps e erros de reconhecimento de fala) numa nota densa e acionável em ${PODCASTS_NOTE_LANG}. Devolves SÓ a nota em Markdown, sem preâmbulo nem comentários. Corriges erros óbvios de transcrição. NUNCA inventas factos que não estejam na transcrição."
+  claude_cmd=(claude -p)
+  [[ -n "$PODCASTS_AI_MODEL" ]] && claude_cmd+=(--model "$PODCASTS_AI_MODEL")
+  set +e
+  {
+    cat <<EOF
+Transforma a transcrição no fim numa nota permanente de Obsidian, com este formato EXATO:
+
+---
+tags: [podcast, referencia]
+categoria: "referencia"
+fonte: "${source}"
+titulo_episodio: "${title}"
+transcricao: "${md}"
+data: $(date +%F)
+status: destilado-ia
+---
+
+# ${title}
+
+## Resumo
+(2-4 frases: do que trata e porque importa)
+
+## Pontos-chave
+(5-10 bullets densos; cada um uma ideia completa, não um título)
+
+## Passos / Checklist acionável
+(passos concretos executáveis; se o episódio não for prático, OMITE esta secção inteira)
+
+## Citações
+(2-4 frases marcantes na língua ORIGINAL do episódio, cada uma com o timestamp [mm:ss] mais próximo)
+
+## Ligações
+(3-7 wikilinks Obsidian úteis para ligar esta nota a temas/conceitos; cria links conceptuais curtos baseados na transcrição, ex.: [[hábitos]], [[finanças pessoais]], [[treino]]. Se não houver material suficiente, OMITE esta secção.)
+
+Regras: densa, sem encher. Omite secções sem material. Mantém os timestamps nas citações. Acrescenta 2-5 tags temáticas ao frontmatter e ajusta categoria com base no conteúdo; usa "vida-pratica" para life hacks, hábitos, organização pessoal e decisões de vida. Não deixes placeholders vazios como [[ ]] ou "-". Não escrevas nada fora da nota.
+
+=== TRANSCRIÇÃO ===
+EOF
+    cat "$md"
+  } | "${claude_cmd[@]}" --append-system-prompt "$sys" > "$note.tmp" 2> "$note.err"
+  rc=$?
+  set -e
+  if [[ -s "$note.tmp" ]]; then
+    if (( rc != 0 )); then warn "claude saiu com código $rc, mas deixou conteúdo; vou guardar a nota."; fi
+    mv -- "$note.tmp" "$note"; rm -f "$note.err"
+    info "Nota destilada: $note"
+    return 0
+  fi
+  err "A IA não devolveu conteúdo. Log: $note.err"
+  rm -f "$note.tmp"
+  return 1
+}
+
+# Oferece, no fim de uma transcrição, como criar a nota.
+finish_note() {
+  local key="$1" title="$2" source="$3" mode folder slug note md
+  mode="$(choose "Criar nota a partir desta transcrição?" \
+    "Destilar com IA (nota pronta)" "Molde vazio" "Agora não")" || return 0
+  case "$mode" in
+    "Destilar com IA"*)
+      folder="$(choose_folder)" || folder="Reference"
+      slug="$(slugify "$title")"
+      note="$VAULT_DIR/$folder/${slug:-nota}.md"
+      if [[ -e "$note" ]]; then confirm "Já existe $note. Sobrescrever?" || return 0; fi
+      md="$(md_for_key "$key")"
+      ai_distill "$md" "$title" "$source" "$note" && { confirm "Abrir no editor?" && open_in_editor "$note"; }
+      ;;
+    "Molde vazio") make_note "$key" "$title" "$source" ;;
+    *) : ;;
+  esac
+}
+
+# --- Criar nota destilada no Obsidian ----------------------------------------
+
+make_note() {
+  local key="$1" title="$2" source="$3" folder note slug
+  folder="$(choose_folder)" || folder="Reference"
+  slug="$(slugify "$title")"
+  note="$VAULT_DIR/$folder/${slug:-nota}.md"
+  if [[ -e "$note" ]]; then
+    warn "Já existe: $note"
+    confirm "Abrir a existente em vez de criar?" && { open_in_editor "$note"; return; }
+    return
+  fi
+  mkdir -p "$(dirname "$note")"
+  cat > "$note" <<EOF
+---
+tags: [podcast, referencia]
+categoria: "referencia"
+fonte: "${source:-?}"
+titulo_episodio: "$title"
+transcricao: "$(md_for_key "$key")"
+data: $(date +%F)
+status: rascunho
+---
+
+# $title
+
+> Destila aqui o essencial. Apaga este aviso. A transcrição bruta está em \`transcricao\` no frontmatter — abre-a só para ir buscar citações exatas.
+
+## Resumo
+
+
+
+## Pontos-chave
+
+- [ ]
+- [ ]
+- [ ]
+
+## Passos / Checklist acionável
+
+1.
+
+## Citações
+
+>
+
+## Ligações
+
+- [[ ]]
+EOF
+  info "Nota criada: $note"
+  confirm "Abrir agora no editor?" && open_in_editor "$note"
+}
+
+open_in_editor() {
+  local f="$1"
+  if has obsidian; then warn "Abre no Obsidian manualmente: $f"; fi
+  if [[ -n "${EDITOR:-}" ]]; then "$EDITOR" "$f" </dev/tty >/dev/tty 2>&1 || true
+  elif has nvim; then nvim "$f" </dev/tty >/dev/tty 2>&1 || true
+  else ${PAGER:-less} "$f" </dev/tty >/dev/tty 2>&1 || true; fi
+}
+
+# --- Fluxos principais -------------------------------------------------------
+
+add_from_url() {
+  init_project_dirs
+  local url title key mp3 output lang model chunks guessed media
+  url="${PODCASTS_URL_ARG:-}"
+  [[ -n "$url" ]] || url="$(input "URL do episódio (RSS/mp3/YouTube/...)" "")"
+  [[ -n "$url" ]] || { warn "Sem URL."; pause; return; }
+  info "A obter título..."
+  guessed="$(yt-dlp --no-warnings --get-title "$url" 2>/dev/null | head -1 || true)"
+  title="$(input "Título do episódio" "${guessed:-Podcast}")"
+  key="$(make_key "$title")"
+  mp3="$(mp3_for_key "$key")"
+  output="$(md_for_key "$key")"
+
+  info "A descarregar áudio -> $mp3"
+  if is_direct_audio_url "$url"; then
+    download_media_as_mp3 "$url" "$mp3" || { err "Download falhou."; pause; return; }
+  elif yt-dlp -x --audio-format mp3 --no-warnings -o "$MP3_DIR/${key}.%(ext)s" "$url" 2>/dev/null \
+     && compgen -G "$MP3_DIR/${key}.*" >/dev/null; then
+    [[ -f "$mp3" ]] || mp3="$(find "$MP3_DIR" -name "${key}.*" -type f | head -1)"
+  else
+    # Fallback: host não suportado pelo yt-dlp (transistor, simplecast...) ->
+    # extrai o enclosure direto do HTML da página.
+    warn "yt-dlp não suporta este URL; a tentar enclosure direto do HTML..."
+    media="$(media_url_from_page "$url")"
+    [[ -n "$media" ]] || { err "Não encontrei áudio nesse URL. Tenta o feed RSS do programa."; pause; return; }
+    info "Enclosure: $media"
+    download_media_as_mp3 "$media" "$mp3" || { err "Download falhou."; pause; return; }
+  fi
+
+  lang="$(choose_language)" || { pause; return; }
+  model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
+  chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
+
+  echo; info "A transcrever (arquiva OPUS no fim)..."
+  if run_transcription "$mp3" "$output" "$lang" "$model" "$chunks" "1"; then
+    fix_header "$output" "$title" "$url"
+    warn_transcription_coverage "$mp3" "$output"
+    if [[ -f "$(opus_for_key "$key")" ]]; then
+      rm -f -- "$mp3"; info "MP3 apagado; OPUS arquivado: $(opus_for_key "$key")"
+    fi
+    info "Transcrição: $output"
+    finish_note "$key" "$title" "$url"
+  else
+    err "Transcrição falhou. MP3 mantido: $mp3"
+  fi
+  pause
+}
+
+add_from_feed() {
+  init_project_dirs
+  local feed title audio_url episode_url pub_date source key mp3 output lang model chunks tmp row
+  feed="$(choose_feed)" || { pause; return; }
+  [[ -n "$feed" ]] || { pause; return; }
+  info "A ler feed (pode demorar uns segundos)..."
+  tmp="$(mktemp)"
+  feed_episodes "$feed" > "$tmp"
+  if [[ ! -s "$tmp" ]]; then err "Feed sem episódios/enclosures legíveis."; rm -f "$tmp"; pause; return; fi
+  info "$(wc -l < "$tmp") episódios. Escreve para filtrar."
+  mapfile -t titles < <(cut -f1 "$tmp")
+  title="$(pick_title "Episódio" "${titles[@]}")" || { rm -f "$tmp"; return; }
+  [[ -n "$title" ]] || { rm -f "$tmp"; return; }
+  row="$(awk -F'\t' -v t="$title" '$1 == t { print; exit }' "$tmp")"
+  rm -f "$tmp"
+  IFS=$'\t' read -r title audio_url episode_url pub_date <<< "$row"
+  [[ -n "$audio_url" ]] || { err "Sem URL para esse episódio."; pause; return; }
+  source="${episode_url:-$feed}"
+  key="$(make_key "$title")"
+  mp3="$(mp3_for_key "$key")"
+  output="$(md_for_key "$key")"
+
+  info "A descarregar: $audio_url -> $mp3"
+  download_media_as_mp3 "$audio_url" "$mp3" || { err "Download falhou."; pause; return; }
+
+  lang="$(choose_language)" || { pause; return; }
+  model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
+  chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
+
+  echo; info "A transcrever (arquiva OPUS no fim)..."
+  if run_transcription "$mp3" "$output" "$lang" "$model" "$chunks" "1"; then
+    fix_header "$output" "$title" "$source"
+    warn_transcription_coverage "$mp3" "$output"
+    if [[ -f "$(opus_for_key "$key")" ]]; then
+      rm -f -- "$mp3"; info "MP3 apagado; OPUS arquivado."
+    fi
+    info "Transcrição: $output"
+    finish_note "$key" "$title" "$source"
+  else
+    err "Transcrição falhou. MP3 mantido: $mp3"
+  fi
+  pause
+}
+
+add_from_file() {
+  init_project_dirs
+  local src title key mp3 output lang model chunks
+  src="$(input "Caminho do ficheiro áudio" "")"
+  [[ -f "$src" ]] || { err "Não encontrado: $src"; pause; return; }
+  title="$(input "Título do episódio" "$(basename "${src%.*}")")"
+  key="$(make_key "$title")"
+  output="$(md_for_key "$key")"
+
+  lang="$(choose_language)" || { pause; return; }
+  model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
+  chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
+
+  # Copia para o projeto como mp3 base (para arquivo OPUS coerente).
+  mp3="$(mp3_for_key "$key")"
+  if [[ "$src" == *.mp3 ]]; then cp -- "$src" "$mp3"; else
+    info "A converter para mp3..."
+    ffmpeg -hide_banner -loglevel error -y -i "$src" -c:a libmp3lame -q:a 4 "$mp3"
+  fi
+
+  echo; info "A transcrever (arquiva OPUS no fim)..."
+  if run_transcription "$mp3" "$output" "$lang" "$model" "$chunks" "1"; then
+    fix_header "$output" "$title" "$(basename "$src")"
+    warn_transcription_coverage "$mp3" "$output"
+    if [[ -f "$(opus_for_key "$key")" ]]; then
+      rm -f -- "$mp3"; info "MP3 temporário apagado; OPUS arquivado."
+    fi
+    info "Transcrição: $output"
+    finish_note "$key" "$title" "$(basename "$src")"
+  else
+    err "Transcrição falhou. MP3 mantido: $mp3"
+  fi
+  pause
+}
+
+episode_keys() {
+  init_project_dirs
+  shopt -s nullglob
+  local f
+  for f in "$TRANSCRICOES_DIR"/pod_*.md "$OPUS_DIR"/pod_*.opus "$MP3_DIR"/pod_*.mp3; do
+    [[ -f "$f" ]] || continue
+    key_from_path "$f"
+  done | sort -u
+}
+
+note_for_key() {
+  local key="$1" md title slug
+  md="$(md_for_key "$key")"
+  title="$(title_from_md "$md")"
+  [[ -n "$title" ]] || return 0
+  slug="$(slugify "$title")"
+  [[ -n "$slug" ]] || return 0
+  find "$VAULT_DIR" -path "$VAULT_DIR/.obsidian" -prune -o -type f -name "${slug}.md" -print -quit 2>/dev/null
+}
+
+show_status() {
+  init_project_dirs
+  style "🎧 Podcasts — estado"
+  {
+    printf 'Projeto\t%s\n' "$PODCASTS_DIR"
+    printf 'Transcrições\t%s\n' "$TRANSCRICOES_DIR"
+    printf 'OPUS (arquivo)\t%s\n' "$OPUS_DIR"
+    printf 'Vault Obsidian\t%s\n' "$VAULT_DIR"
+    printf 'Pasta sugerida\t%s\n' "$NOTES_DIR"
+  } | column -t -s $'\t'
+  echo
+  local key md opus mp3 note md_s opus_s mp3_s note_s
+  {
+    printf 'Episódio\tMD\tOPUS\tMP3\tNota\n'
+    while IFS= read -r key; do
+      [[ -n "$key" ]] || continue
+      md="$(md_for_key "$key")"; opus="$(opus_for_key "$key")"; mp3="$(mp3_for_key "$key")"; note="$(note_for_key "$key")"
+      [[ -e "$md" ]] && md_s="✅" || md_s="—"
+      [[ -e "$opus" ]] && opus_s="✅" || opus_s="—"
+      [[ -e "$mp3" ]] && mp3_s="⏳" || mp3_s="—"
+      [[ -n "$note" ]] && note_s="✅" || note_s="—"
+      printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$md_s" "$opus_s" "$mp3_s" "$note_s"
+    done < <(episode_keys)
+  } | column -t -s $'\t'
+}
+
+choose_transcription() {
+  local prompt="$1"
+  shopt -s nullglob
+  mapfile -t files < <(ls -1 "$TRANSCRICOES_DIR"/pod_*.md 2>/dev/null | sort -r)
+  if (( ${#files[@]} == 0 )); then warn "Sem transcrições."; return 1; fi
+  choose "$prompt" "${files[@]}"
+}
+
+open_transcription() {
+  local md; md="$(choose_transcription "Abrir transcrição")" || { pause; return; }
+  open_in_editor "$md"
+}
+
+note_from_existing() {
+  local md key title source
+  md="$(choose_transcription "Transcrição base da nota")" || { pause; return; }
+  key="$(key_from_path "$md")"
+  title="$(input "Título da nota" "$(title_from_md "$md")")"
+  source="$(source_from_md "$md")"; [[ -n "$source" ]] || source="$md"
+  make_note "$key" "$title" "$source"
+  pause
+}
+
+distill_existing() {
+  local md title source folder slug note
+  md="$(choose_transcription "Transcrição a destilar com IA")" || { pause; return; }
+  title="$(input "Título da nota" "$(title_from_md "$md")")"
+  source="$(source_from_md "$md")"; [[ -n "$source" ]] || source="$md"
+  folder="$(choose_folder)" || folder="Reference"
+  slug="$(slugify "$title")"
+  note="$VAULT_DIR/$folder/${slug:-nota}.md"
+  if [[ -e "$note" ]]; then confirm "Já existe $note. Sobrescrever?" || { pause; return; }; fi
+  ai_distill "$md" "$title" "$source" "$note" && { confirm "Abrir no editor?" && open_in_editor "$note"; }
+  pause
+}
+
+mp3_archive_candidates() {
+  init_project_dirs
+  shopt -s nullglob
+  local mp3 key
+  for mp3 in "$MP3_DIR"/pod_*.mp3; do
+    [[ -f "$mp3" ]] || continue
+    key="$(key_from_path "$mp3")"
+    [[ -f "$(opus_for_key "$key")" ]] && continue
+    printf '%s\n' "$mp3"
+  done | sort -r
+}
+
+archive_mp3_one() {
+  init_project_dirs
+  mapfile -t files < <(mp3_archive_candidates)
+  if (( ${#files[@]} == 0 )); then warn "Sem MP3 pendente para arquivar."; pause; return; fi
+  local mp3 key opus
+  mp3="$(choose "MP3 para arquivar em OPUS" "${files[@]}")" || { pause; return; }
+  key="$(key_from_path "$mp3")"
+  opus="$(opus_for_key "$key")"
+  info "A criar OPUS: $opus"
+  ffmpeg -hide_banner -loglevel error -y -i "$mp3" \
+    -c:a libopus -b:a "$OPUS_BITRATE" -vbr on -compression_level 10 -ac 1 \
+    "$opus"
+  archive_record_opus "$mp3" "$opus"
+  if [[ -s "$opus" ]]; then
+    rm -f -- "$mp3"
+    info "MP3 apagado; OPUS arquivado: $opus"
+  fi
+  pause
+}
+
+retranscribe() {
+  init_project_dirs
+  shopt -s nullglob
+  mapfile -t files < <({ ls -1 "$OPUS_DIR"/pod_*.opus 2>/dev/null; ls -1 "$MP3_DIR"/pod_*.mp3 2>/dev/null; } | sort -r)
+  if (( ${#files[@]} == 0 )); then warn "Sem áudio arquivado/pendente para refazer."; pause; return; fi
+  local audio key output lang model chunks backup title source archive
+  audio="$(choose "Áudio para refazer transcrição" "${files[@]}")" || { pause; return; }
+  key="$(key_from_path "$audio")"
+  output="$(md_for_key "$key")"
+  title="$(title_from_md "$output")"; [[ -n "$title" ]] || title="$key"
+  source="$(source_from_md "$output")"; [[ -n "$source" ]] || source="$audio"
+  lang="$(choose_language)" || { pause; return; }
+  model="$(input "Modelo" "$WHISPER_MODEL_DEFAULT")"
+  chunks="$(input "Blocos segundos" "$CHUNK_SECONDS_DEFAULT")"
+  if [[ -f "$output" ]]; then
+    backup="$BACKUP_DIR/$(basename "${output%.md}").bak-$(date +%Y%m%d-%H%M%S).md"
+    cp -- "$output" "$backup"; info "Backup: $backup"
+  fi
+  archive="0"
+  [[ "$audio" == *.mp3 ]] && archive="1"
+  if run_transcription "$audio" "$output" "$lang" "$model" "$chunks" "$archive"; then
+    fix_header "$output" "$title" "$source"
+    warn_transcription_coverage "$audio" "$output"
+    if [[ "$audio" == *.mp3 && -f "$(opus_for_key "$key")" ]]; then
+      rm -f -- "$audio"
+      info "MP3 apagado; OPUS arquivado: $(opus_for_key "$key")"
+    fi
+    info "Refeita: $output"
+  else
+    err "Falhou."
+  fi
+  pause
+}
+
+open_folder() {
+  if has xdg-open; then xdg-open "$PODCASTS_DIR" >/dev/null 2>&1 & disown || true; fi
+  info "$PODCASTS_DIR"
+  pause
+}
+
+show_help() {
+  cat <<EOF
+Fluxo recomendado
+
+1. "Novo de feed (RSS)" -> escolhe/cola o feed RSS do programa, filtra o episódio
+   por título, baixa, transcreve, arquiva OPUS, apaga MP3.  (melhor opção)
+   Alternativas: "Novo de URL" (YouTube ou página de episódio) ou "ficheiro".
+2. O áudio fica arquivado em OPUS e o MP3 temporário é apagado.
+3. "Destilar com IA" -> cria a nota final no vault com resumo, pontos-chave e citações.
+4. Alternativa: "Criar nota" gera só um molde vazio para destilação manual.
+
+Como obter o feed RSS: na página do programa procura "RSS"/"Subscribe", ou usa o
+domínio do host. Ex. transistor: https://feeds.transistor.fm/<nome-do-programa>
+Feeds que guardas ficam em: $FEEDS_FILE
+
+Projeto (scratch local, fora do vault/Syncthing):
+  $PODCASTS_DIR
+    transcricoes/   .md bruto com timestamps  (destilas a partir daqui)
+    audio/opus/     arquivo comprimido (refazer transcrição quando quiseres)
+    audio/mp3/      temporário durante o processo
+    backups/        versões anteriores de transcrições
+
+Notas finais destiladas: $NOTES_DIR (e outras pastas do vault à escolha)
+
+Config: $PODCASTS_ENV  (override de PODCASTS_DIR, NOTES_DIR, WHISPER_MODEL_DEFAULT, etc.)
+
+Comandos:
+  podcasts                 # menu
+  podcasts feed            # fluxo RSS direto
+  podcasts url <URL>       # adiciona direto (modo não-interativo parcial)
+  podcasts status
+  podcasts refazer          # refaz transcrição a partir de OPUS/MP3 pendente
+  podcasts arquivar-mp3     # converte MP3 pendente para OPUS sem retranscrever
+  podcasts setup
+  podcasts help
+EOF
+  pause
+}
+
+capture_menu() {
+  while true; do
+    clear || true
+    style "🎧 Podcasts → Novo"
+    info "Melhor caminho: Feed RSS → episódio → transcrição → OPUS → nota"; echo
+    choice="$(choose "Novo podcast" \
+      "De feed RSS" "De URL" "De ficheiro áudio" "Voltar")"
+    case "$choice" in
+      "De feed RSS") add_from_feed ;;
+      "De URL") add_from_url ;;
+      "De ficheiro áudio") add_from_file ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+notes_menu() {
+  while true; do
+    clear || true
+    style "🎧 Podcasts → Notas"
+    info "Transforma transcrições brutas em notas úteis no Obsidian."; echo
+    choice="$(choose "Notas" \
+      "Destilar com IA" "Criar nota (molde vazio)" "Abrir transcrição" "Voltar")"
+    case "$choice" in
+      "Destilar com IA") distill_existing ;;
+      "Criar nota (molde vazio)") note_from_existing ;;
+      "Abrir transcrição") open_transcription ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+manage_menu() {
+  while true; do
+    clear || true
+    style "🎧 Podcasts → Gestão"
+    info "Manutenção do scratch local e arquivo áudio."; echo
+    choice="$(choose "Gestão" \
+      "Refazer transcrição" "Arquivar MP3 pendente" "Abrir pasta" "Help" "Voltar")"
+    case "$choice" in
+      "Refazer transcrição") retranscribe ;;
+      "Arquivar MP3 pendente") archive_mp3_one ;;
+      "Abrir pasta") open_folder ;;
+      "Help") show_help ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+main_menu() {
+  init_project_dirs
+  while true; do
+    clear || true
+    style "🎧 Podcasts → Notas"
+    info "Projeto: $PODCASTS_DIR"; echo
+    choice="$(choose "Escolhe" \
+      "Novo podcast" "Notas" "Ver estado" "Gestão" "Help" "Sair")"
+    case "$choice" in
+      "Novo podcast") capture_menu ;;
+      "Notas") notes_menu ;;
+      "Ver estado") show_status; pause ;;
+      "Gestão") manage_menu ;;
+      "Help") show_help ;;
+      "Sair"|"") break ;;
+    esac
+  done
+}
+
+cmd="${1:-menu}"
+case "$cmd" in
+  menu) main_menu ;;
+  setup) init_project_dirs; info "Estrutura garantida: $PODCASTS_DIR" ;;
+  feed) add_from_feed ;;
+  url) shift; [[ -n "${1:-}" ]] && { PODCASTS_URL_ARG="$1"; add_from_url; } || { err "Falta URL"; exit 2; } ;;
+  status) show_status ;;
+  refazer|retranscrever) retranscribe ;;
+  arquivar-mp3) archive_mp3_one ;;
+  help|-h|--help) show_help ;;
+  *) err "Comando desconhecido: $cmd"; echo "Usa: podcasts help"; exit 2 ;;
+esac
