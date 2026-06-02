@@ -1,4 +1,27 @@
 #!/bin/bash
+#
+# transcrever-audio — MOTOR genérico de transcrição (faster-whisper, CPU).
+#
+# Para outros agentes/leitores:
+#   Isto NÃO é específico de reuniões. É o motor partilhado de transcrição,
+#   reutilizado por vários frontends:
+#     - `reunioes`  (TUI de gravação/transcrição de reuniões)
+#     - `podcasts`  (TUI de podcast -> transcrição -> nota Obsidian)
+#   Antes chamava-se `transcrever-reuniao`; renomeado em 2026-06 porque passou
+#   a servir mais que reuniões. Se acrescentares outro frontend, chama este.
+#
+# Faz: recebe um ficheiro áudio (wav/mp3/opus/...), corta silêncio (opcional),
+#   parte em blocos, transcreve com faster-whisper e escreve Markdown com
+#   timestamps [mm:ss]. Opcionalmente arquiva o áudio em OPUS (ARCHIVE_OPUS=1).
+#
+# Cabeçalho do .md: "# Transcrição <ficheiro>". Os frontends podem reescrever
+#   esse cabeçalho (ex.: `podcasts` chama fix_header para pôr título/fonte).
+#
+# Uso:    transcrever-audio /caminho/audio.<ext> [saida.md]
+# Env:    WHISPER_MODEL, WHISPER_LANGUAGE, CHUNK_SECONDS, TRIM_SILENCE,
+#         ARCHIVE_OPUS, OPUS_DIR, TRANSCRICOES_DIR, ARCHIVE_INDEX,
+#         FASTER_WHISPER_PYTHON, REUNIOES_ENV (ficheiro de env partilhado).
+#         WHISPER_LANGUAGE="" ativa deteção automática.
 
 set -euo pipefail
 
@@ -15,8 +38,8 @@ if [[ -f "$REUNIOES_ENV" ]]; then
 fi
 
 if [[ $# -lt 1 ]]; then
-    echo "Uso: transcrever-reuniao /caminho/para/audio.wav [ficheiro_saida.md]" >&2
-    echo "Variáveis: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt CHUNK_SECONDS=180 TRIM_SILENCE=1 ARCHIVE_OPUS=0" >&2
+    echo "Uso: transcrever-audio /caminho/para/audio.wav [ficheiro_saida.md]" >&2
+    echo "Variáveis: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt (ou vazio=auto) CHUNK_SECONDS=180 TRIM_SILENCE=1 ARCHIVE_OPUS=0" >&2
     echo "           REUNIOES_ENV=~/.config/reunioes/env FASTER_WHISPER_PYTHON=... TRANSCRICOES_DIR=... OPUS_DIR=... ARCHIVE_INDEX=..." >&2
     echo "           AUDIO_STABLE_CHECKS=2 AUDIO_STABLE_INTERVAL=3" >&2
     exit 1
@@ -40,7 +63,13 @@ else
 fi
 
 WHISPER_MODEL="${WHISPER_MODEL:-${WHISPER_MODEL_DEFAULT:-large-v3}}"
-WHISPER_LANGUAGE="${WHISPER_LANGUAGE:-pt}"
+if [[ "${WHISPER_LANGUAGE+x}" ]]; then
+    # Valor vazio é intencional: faster-whisper faz auto-detect.
+    WHISPER_LANGUAGE="${WHISPER_LANGUAGE}"
+else
+    WHISPER_LANGUAGE="${WHISPER_LANGUAGE_DEFAULT:-pt}"
+fi
+export WHISPER_MODEL WHISPER_LANGUAGE
 CHUNK_SECONDS="${CHUNK_SECONDS:-180}"
 TRIM_SILENCE="${TRIM_SILENCE:-1}"
 TRIM_THRESHOLD="${TRIM_THRESHOLD:--45dB}"
@@ -72,7 +101,7 @@ else
     fi
 fi
 
-CHUNK_DIR=$(mktemp -d /tmp/transcrever_reuniao_chunks_XXXXXX)
+CHUNK_DIR=$(mktemp -d /tmp/transcrever_audio_chunks_XXXXXX)
 TRIMMED_AUDIO="$CHUNK_DIR/trimmed_input.wav"
 AUDIO_FOR_TRANSCRIBE="$AUDIO_FILE"
 
@@ -300,7 +329,7 @@ def fmt_time(seconds):
 with open(outfile, "w", encoding="utf-8", buffering=1) as f:
     total_chunks = len(chunk_files)
     started_at = time.time()
-    f.write(f"# Reunião {os.path.basename(audio_file)}\n\n")
+    f.write(f"# Transcrição {os.path.basename(audio_file)}\n\n")
     f.write(f"_Modelo: {active_model}, língua: {language or 'auto'}, blocos de {chunk_seconds} segundos_\n\n")
     f.flush()
 

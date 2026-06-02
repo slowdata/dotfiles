@@ -29,6 +29,13 @@ QC_SILENCE_MIN_DURATION="${QC_SILENCE_MIN_DURATION:-2}"
 QC_MAX_SILENCE_PERCENT="${QC_MAX_SILENCE_PERCENT:-60}"
 QC_MIN_MAX_VOLUME_DB="${QC_MIN_MAX_VOLUME_DB:--35}"
 ARCHIVE_INDEX="${ARCHIVE_INDEX:-$REUNIOES_DIR/.arquivo-audio.tsv}"
+LOGSEQ_DIR="${LOGSEQ_DIR:-$HOME/Sync/Logseq}"
+LOGSEQ_JOURNALS_DIR="${LOGSEQ_JOURNALS_DIR:-$LOGSEQ_DIR/journals}"
+REUNIOES_AI_CMD="${REUNIOES_AI_CMD:-pi}"
+REUNIOES_AI_PROVIDER="${REUNIOES_AI_PROVIDER:-}"
+REUNIOES_AI_MODEL="${REUNIOES_AI_MODEL:-}"
+REUNIOES_AI_THINKING="${REUNIOES_AI_THINKING:-minimal}"
+REUNIOES_AI_LANG="${REUNIOES_AI_LANG:-português de Portugal}"
 
 has() { command -v "$1" >/dev/null 2>&1; }
 use_gum() { has gum && [[ -t 0 && -t 1 ]] && ( : </dev/tty ) 2>/dev/null; }
@@ -79,6 +86,16 @@ input() {
     else read -rp "$prompt [$default] " value; fi
     printf '%s\n' "${value:-$default}"
   fi
+}
+
+copy_to_clipboard() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  if has wl-copy; then wl-copy < "$file"; return 0; fi
+  if has xclip; then xclip -selection clipboard < "$file"; return 0; fi
+  if has xsel; then xsel --clipboard --input < "$file"; return 0; fi
+  if has pbcopy; then pbcopy < "$file"; return 0; fi
+  return 1
 }
 
 init_project_dirs() {
@@ -369,11 +386,111 @@ transcribe_pending() {
   if [[ "$audio" == *.wav ]] && confirm "Criar OPUS no fim da transcrição? (mantém WAV)"; then archive="1"; fi
   echo; info "A transcrever: $audio -> $output"
   if [[ -n "$lang" ]]; then
-    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$output"
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-audio "$audio" "$output"
   else
-    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$output"
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-audio "$audio" "$output"
   fi
   pause
+}
+
+all_transcription_files() {
+  init_project_dirs
+  find "$TRANSCRICOES_DIR" -maxdepth 1 -type f -name 'reuniao_*.md' \
+    ! -name '*.bak-*.md' ! -name '*.partial.md' ! -name '*.retry*.md' \
+    -printf '%T@\t%p\n' 2>/dev/null | sort -nr | cut -f2-
+}
+
+choose_transcription_file() {
+  local prompt="$1"
+  mapfile -t files < <(all_transcription_files)
+  if (( ${#files[@]} == 0 )); then warn "Não há transcrições em $TRANSCRICOES_DIR."; return 1; fi
+  choose "$prompt" "${files[@]}"
+}
+
+run_ai_sanitize() {
+  local md="$1" output="$2" key sys prompt rc
+  local ai_cmd=()
+  [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
+  has "$REUNIOES_AI_CMD" || { err "Comando de IA não encontrado: $REUNIOES_AI_CMD"; return 1; }
+  mkdir -p "$(dirname "$output")"
+  key="$(key_from_path "$md")"
+  sys="És assistente de reuniões técnicas da PGR. Transformas transcrições cruas com timestamps e erros de reconhecimento de fala em notas limpas para Logseq, em ${REUNIOES_AI_LANG}. Corriges termos técnicos óbvios, mas NUNCA inventas factos. Se a gravação estiver incompleta, assinalas isso claramente. Devolves SÓ os bullets Logseq, sem preâmbulo, sem cercas de código."
+  prompt="$(cat <<EOF
+Sanitiza/resume a transcrição anexada e gera notas prontas a colar dentro da entrada Logseq da reunião.
+
+Contexto provável: reuniões eEvidence/e-CODEX/PGR. Termos frequentes: PT_PGR, Domibus, CMT, P-Modes, CRL, CCDB, CDB, mTLS, EPOC, EPOC-PR, XA, COM_ACC_XA, ACCEPT, QA/ACC, production, acceptance, Service Provider.
+
+Formato obrigatório:
+\t- #### Notas sanitizadas por IA
+\t\t- Fontes:
+\t\t\t- Transcrição: \`${md}\`.
+\t\t- Qualidade / limites:
+\t\t\t- Diz se a transcrição parece completa ou parcial.
+\t- #### TL;DR
+\t\t- 4 a 8 bullets densos.
+\t- #### Pontos discutidos
+\t\t- Agrupa por tema, com sub-bullets.
+\t- #### Ações / follow-up
+\t\t- Lista apenas ações suportadas pela transcrição; se não houver ações claras, escreve que não ficaram ações claras.
+
+Regras:
+- Mantém a indentação Logseq com tabs: primeiro nível com uma tab antes de "-", segundo nível com duas tabs, etc.
+- Não incluas timestamps salvo quando ajudam a localizar uma citação/ponto duvidoso.
+- Corrige nomes/termos técnicos quando for óbvio, mas marca incertezas com "provável".
+- Não inventes participantes, decisões, prazos ou ações.
+- Não escrevas nada fora dos bullets.
+EOF
+)"
+  ai_cmd=("$REUNIOES_AI_CMD" -p --no-tools --no-context-files --no-session --no-extensions --no-skills --no-prompt-templates)
+  [[ -n "$REUNIOES_AI_PROVIDER" ]] && ai_cmd+=(--provider "$REUNIOES_AI_PROVIDER")
+  [[ -n "$REUNIOES_AI_MODEL" ]] && ai_cmd+=(--model "$REUNIOES_AI_MODEL")
+  [[ -n "$REUNIOES_AI_THINKING" ]] && ai_cmd+=(--thinking "$REUNIOES_AI_THINKING")
+  info "A sanitizar com IA via $REUNIOES_AI_CMD: $key"
+  set +e
+  "${ai_cmd[@]}" --system-prompt "$sys" "@$md" "$prompt" > "$output.tmp" 2> "$output.err"
+  rc=$?
+  set -e
+  if [[ -s "$output.tmp" ]]; then
+    if (( rc != 0 )); then warn "IA saiu com código $rc, mas devolveu conteúdo; vou guardar."; fi
+    mv -- "$output.tmp" "$output"
+    rm -f -- "$output.err"
+    return 0
+  fi
+  err "A IA não devolveu conteúdo. Log: $output.err"
+  rm -f -- "$output.tmp"
+  return 1
+}
+
+sanitize_transcription_ai() {
+  local md="${1:-}" output="${2:-}" key ts interactive=false
+  init_project_dirs
+  if [[ -z "$md" ]]; then
+    interactive=true
+    md="$(choose_transcription_file "Transcrição para sanitizar/resumir com IA")" || { pause; return; }
+  fi
+  [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
+  key="$(key_from_path "$md")"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  output="${output:-$BACKUP_DIR/${key}.logseq-ia-${ts}.md}"
+  if [[ -e "$output" ]]; then
+    if [[ "$interactive" == true ]]; then confirm "Já existe $output. Sobrescrever?" || return 0
+    else err "Destino já existe: $output"; return 1; fi
+  fi
+  run_ai_sanitize "$md" "$output" || { [[ "$interactive" == true ]] && pause; return 1; }
+  info "Notas Logseq geradas: $output"
+  if [[ "$interactive" == true ]]; then
+    if confirm "Copiar para o clipboard para colar no Logseq?"; then
+      copy_to_clipboard "$output" && info "Copiado para o clipboard." || warn "Não encontrei wl-copy/xclip/xsel/pbcopy. Copia manualmente: $output"
+    fi
+    if confirm "Mostrar resultado agora?"; then
+      echo
+      sed -n '1,220p' "$output"
+      echo
+    fi
+    pause
+  else
+    printf '%s\n' "$output"
+  fi
 }
 
 all_audio_files() {
@@ -398,9 +515,9 @@ retranscribe_job() {
   info "Output final: $final_output"
   mkdir -p "$(dirname "$tmp_output")" "$(dirname "$final_output")"
   if [[ -n "$lang" ]]; then
-    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$tmp_output" || rc=$?
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-audio "$audio" "$tmp_output" || rc=$?
   else
-    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-reuniao "$audio" "$tmp_output" || rc=$?
+    TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-audio "$audio" "$tmp_output" || rc=$?
   fi
   if (( rc != 0 )); then err "Transcrição falhou com código $rc. Mantido temp/parcial: $tmp_output"; return "$rc"; fi
   if [[ -f "$final_output" ]]; then
@@ -567,7 +684,7 @@ EOF
   }
   trap stop_recording INT
 
-  ffmpeg -f pulse -i "$monitor" -f pulse -i "$mic" \
+  ffmpeg -nostdin -hide_banner -nostats -f pulse -i "$monitor" -f pulse -i "$mic" \
     -filter_complex "[0:a]aformat=channel_layouts=mono,volume=${monitor_gain}[mon];[1:a]aformat=channel_layouts=mono,${mic_filter},volume=${mic_gain}[mic];[mon][mic]amix=inputs=2:duration=longest:normalize=0[mix];[mix]alimiter=limit=0.95[out]" \
     -map "[out]" -ar "$output_rate" -c:a pcm_s16le "$audio_file" >"$ffmpeg_log" 2>&1 &
   ffmpeg_pid=$!
@@ -585,22 +702,25 @@ EOF
   style "🔴 GRAVAÇÃO INICIADA"
   echo "A partir deste momento ESTÁ MESMO A GRAVAR."
   echo "Prima ENTER para PARAR, fechar o WAV e correr a verificação de qualidade."
+  echo "Ficheiro local: $local_audio_file"
   echo
 
-  local start_epoch now elapsed h m s
+  local start_epoch now elapsed h m s cursor_hidden=false
+  if has tput && [[ -t 1 ]] && tput civis 2>/dev/null; then cursor_hidden=true; fi
   start_epoch="$(date +%s)"
   while kill -0 "$ffmpeg_pid" 2>/dev/null; do
     now="$(date +%s)"
     elapsed=$((now - start_epoch))
     h=$((elapsed / 3600)); m=$(((elapsed % 3600) / 60)); s=$((elapsed % 60))
-    printf '\r\033[K🔴 A GRAVAR há %02d:%02d:%02d  |  ENTER = PARAR  |  ficheiro local: %s' "$h" "$m" "$s" "$(basename "$local_audio_file")"
+    printf '\r\033[K🔴 A GRAVAR há %02d:%02d:%02d  — ENTER = PARAR' "$h" "$m" "$s"
     if ( : </dev/tty ) 2>/dev/null; then
-      if read -r -t 1 _ </dev/tty; then stop_recording; break; fi
+      if read -r -s -t 1 _ </dev/tty; then stop_recording; break; fi
     else
-      if read -r -t 1 _; then stop_recording; break; fi
+      if read -r -s -t 1 _; then stop_recording; break; fi
     fi
     [[ "$recording_stopped" == true ]] && break
   done
+  [[ "$cursor_hidden" == true ]] && tput cnorm 2>/dev/null || true
   printf '\r\033[K'
 
   set +e; wait "$ffmpeg_pid"; ffmpeg_status=$?; set -e; trap - INT
@@ -627,7 +747,7 @@ EOF
   echo; echo "✅ Gravação terminada, verificada e publicada para Syncthing"
   echo "   WAV: $final_audio_file"; echo
   echo "Para transcrever: reunioes transcrever"
-  printf '  PT: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt transcrever-reuniao %q %q\n' "$final_audio_file" "$(md_for_key "$(key_from_path "$final_audio_file")")"
+  printf '  PT: WHISPER_MODEL=large-v3 WHISPER_LANGUAGE=pt transcrever-audio %q %q\n' "$final_audio_file" "$(md_for_key "$(key_from_path "$final_audio_file")")"
   pause
 }
 
@@ -764,6 +884,7 @@ Comandos:
   reunioes status
   reunioes transcrever
   reunioes refazer
+  reunioes sanitizar   # gera notas Logseq com IA/Pi a partir de uma transcrição
   reunioes arquivar
   reunioes arquivar-tudo
   reunioes limpar
@@ -776,6 +897,83 @@ EOF
   pause
 }
 
+transcriptions_menu() {
+  while true; do
+    clear || true
+    style "📝 Transcrições"
+    info "Projeto: $REUNIOES_DIR"; echo
+    choice="$(choose "Escolhe" \
+      "Transcrever áudio pendente" "Refazer transcrição" "Voltar")"
+    case "$choice" in
+      "Transcrever áudio pendente") transcribe_pending ;;
+      "Refazer transcrição") retranscribe_audio ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+notes_menu() {
+  while true; do
+    clear || true
+    style "🧠 Notas / Logseq"
+    info "Projeto: $REUNIOES_DIR"; echo
+    choice="$(choose "Escolhe" \
+      "Sanitizar/resumir transcrição com IA" "Voltar")"
+    case "$choice" in
+      "Sanitizar/resumir transcrição com IA") sanitize_transcription_ai ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+archive_menu() {
+  while true; do
+    clear || true
+    style "🗄 Arquivo e limpeza"
+    info "Projeto: $REUNIOES_DIR"; echo
+    choice="$(choose "Escolhe" \
+      "Arquivar um WAV para OPUS" "Arquivar todos os WAV elegíveis" "Limpar WAV antigos" "Voltar")"
+    case "$choice" in
+      "Arquivar um WAV para OPUS") archive_one ;;
+      "Arquivar todos os WAV elegíveis") archive_all ;;
+      "Limpar WAV antigos") cleanup_wavs ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+remote_menu() {
+  while true; do
+    clear || true
+    style "🌐 Remoto / Telegram"
+    info "Projeto: $REUNIOES_DIR"; echo
+    choice="$(choose "Escolhe" \
+      "Remote status" "Remote start" "Remote log" "Voltar")"
+    case "$choice" in
+      "Remote status") remote_status || true; pause ;;
+      "Remote start") remote_start || true; pause ;;
+      "Remote log") remote_log || true; pause ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
+utilities_menu() {
+  while true; do
+    clear || true
+    style "🔧 Utilitários"
+    info "Projeto: $REUNIOES_DIR"; echo
+    choice="$(choose "Escolhe" \
+      "Abrir pasta" "Setup / garantir estrutura" "Help" "Voltar")"
+    case "$choice" in
+      "Abrir pasta") open_folder ;;
+      "Setup / garantir estrutura") init_project_dirs; info "Estrutura do projeto garantida: $REUNIOES_DIR"; pause ;;
+      "Help") show_help ;;
+      "Voltar"|"") break ;;
+    esac
+  done
+}
+
 main_menu() {
   init_project_dirs
   while true; do
@@ -783,19 +981,16 @@ main_menu() {
     style "🎙 Reuniões"
     info "Projeto: $REUNIOES_DIR"; echo
     choice="$(choose "Escolhe" \
-      "Gravar nova reunião" "Ver estado" "Transcrever áudio pendente" "Refazer transcrição" \
-      "Arquivar um WAV para OPUS" "Arquivar todos os WAV elegíveis" "Limpar WAV antigos" \
-      "Abrir pasta" "Help" "Sair")"
+      "🎙 Gravar nova reunião" "📊 Ver estado" "📝 Transcrições" "🧠 Notas / Logseq" \
+      "🗄 Arquivo e limpeza" "🌐 Remoto / Telegram" "🔧 Utilitários" "Sair")"
     case "$choice" in
-      "Gravar nova reunião") record_meeting ;;
-      "Ver estado") show_status; pause ;;
-      "Transcrever áudio pendente") transcribe_pending ;;
-      "Refazer transcrição") retranscribe_audio ;;
-      "Arquivar um WAV para OPUS") archive_one ;;
-      "Arquivar todos os WAV elegíveis") archive_all ;;
-      "Limpar WAV antigos") cleanup_wavs ;;
-      "Abrir pasta") open_folder ;;
-      "Help") show_help ;;
+      "🎙 Gravar nova reunião") record_meeting ;;
+      "📊 Ver estado") show_status; pause ;;
+      "📝 Transcrições") transcriptions_menu ;;
+      "🧠 Notas / Logseq") notes_menu ;;
+      "🗄 Arquivo e limpeza") archive_menu ;;
+      "🌐 Remoto / Telegram") remote_menu ;;
+      "🔧 Utilitários") utilities_menu ;;
       "Sair"|"") break ;;
     esac
   done
@@ -810,6 +1005,7 @@ case "$cmd" in
   transcrever) transcribe_pending ;;
   refazer) retranscribe_audio ;;
   refazer-job) shift; retranscribe_job "$@" ;;
+  sanitizar|resumir) shift; sanitize_transcription_ai "$@" ;;
   arquivar) archive_one ;;
   arquivar-tudo) archive_all ;;
   limpar) cleanup_wavs ;;
