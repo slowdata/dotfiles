@@ -5,7 +5,8 @@
  *
  *  SEARCH:
  *    Tier 1 — Brave Search  (BRAVE_SEARCH_API_KEY,  $5 free/mês = 1000 searches)
- *    Tier 2 — Tavily        (TAVILY_API_KEY,         1000/mês free, devolve conteúdo extraído)
+ *    Tier 2 — Google/Serper (SERPER_API_KEY,        2500/mês free por defeito)
+ *    Tier 3 — Tavily        (TAVILY_API_KEY,         1000/mês free, devolve conteúdo extraído)
  *    Fallback — Bing        (sem key, sempre disponível)
  *
  *  FETCH (url → texto limpo):
@@ -14,18 +15,20 @@
  *    Tier 3 — Firecrawl     (FIRECRAWL_API_KEY, 500 créditos/mês free, never fails)
  *
  *  Regras:
- *    - Search usa o melhor disponível (Brave > Tavily > Bing), por esta ordem.
+ *    - Search usa o melhor disponível (Brave > Google/Serper > Tavily > Bing), por esta ordem.
  *    - Fetch tenta Jina primeiro; se falhar cai para curl; Firecrawl só se pedido
  *      explicitamente (param force="firecrawl") ou se curl devolver <200 chars úteis.
  *
  *  Chaves (adicionar ao ~/.bashrc ou ~/.zshenv):
  *    export BRAVE_SEARCH_API_KEY="..."    # https://brave.com/search/api/
+ *    export SERPER_API_KEY="..."          # https://serper.dev     (opcional)
+ *    export SERPER_MONTHLY_LIMIT="2500"   # limite local Google/Serper (opcional)
  *    export TAVILY_API_KEY="..."          # https://tavily.com
  *    export FIRECRAWL_API_KEY="..."       # https://firecrawl.dev  (opcional)
  *    export JINA_API_KEY="..."            # https://jina.ai        (opcional, aumenta rate limit)
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -48,13 +51,16 @@ function exec(cmd: string, args: string[], timeoutMs = 20000): Promise<{ stdout:
 
 const STATS_FILE = join(homedir(), ".pi", "agent", "web-search-stats.json");
 
-// Lê variável do ambiente ou faz fallback para ~/.zshenv
+// Lê variável do ambiente ou faz fallback para ~/.zshenv.
+// Aceita: export NAME="...", export NAME='...', export NAME=..., NAME=...
 function getKey(name: string): string | undefined {
   if (process.env[name]) return process.env[name];
   try {
     const zshenv = readFileSync(join(homedir(), ".zshenv"), "utf-8");
-    const m = zshenv.match(new RegExp('export ' + name + '="([^"]+)"'));
-    if (m) return m[1];
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?:^|\\n)\\s*(?:export\\s+)?${escaped}=([^\\n#]+)`);
+    const m = zshenv.match(re);
+    if (m) return m[1].trim().replace(/^['"]|['"]$/g, "");
   } catch {}
   return undefined;
 }
@@ -577,8 +583,9 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 
       // Sugestões de upgrade só quando a pesquisa falha
       const tips: string[] = [];
-      if (!braveKey && !tavilyKey) tips.push("💡 **Brave API** (grátis): https://brave.com/search/api/ → define `BRAVE_SEARCH_API_KEY`");
-      if (!tavilyKey) tips.push("⚡ **Tavily** (grátis, mais conteúdo): https://tavily.com → define `TAVILY_API_KEY`");
+      if (!braveKey) tips.push("💡 **Brave API**: https://brave.com/search/api/ → define `BRAVE_SEARCH_API_KEY`");
+      if (!serperKey) tips.push("🔎 **Serper/Google**: https://serper.dev → define `SERPER_API_KEY`");
+      if (!tavilyKey) tips.push("⚡ **Tavily**: https://tavily.com → define `TAVILY_API_KEY`");
       const tipBlock = tips.length ? `\n\n> ${tips.join("\n> ")}` : "";
 
       if (!results.length) {
