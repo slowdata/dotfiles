@@ -1,0 +1,15 @@
+collections:
+  pgr:
+    path: /home/dias/Sync/Obsidian/PGR
+    pattern: "**/*.md"
+    context:
+      "": "Vault Obsidian PGR: trabalho ativo na Procuradoria-Geral da República, reuniões, projetos, tickets helpdesk, infraestrutura, documentação técnica, eEvidence/eEdes, SIMP, PROGEST, NSIMP, ADC e microserviços."
+  pessoal:
+    path: /home/dias/Sync/Obsidian/Personal
+    pattern: "**/*.md"
+    context:
+      "": "Vault Obsidian Personal: vida pessoal, família, casa, finanças pessoais, saúde, desporto, receitas, férias, livros, notas técnicas pessoais e carreira."
+models:
+  embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+  generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
+  rerank: hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf

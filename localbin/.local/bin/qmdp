@@ -2,62 +2,113 @@
 
 set -euo pipefail
 
-COLLECTION="${QMDP_COLLECTION:-pgr}"
+SELF="$(basename "$0")"
+case "$SELF" in
+  qmdpersonal|qmdpessoal|qmdpriv) DEFAULT_COLLECTION="pessoal" ;;
+  qmdobs|qmdall) DEFAULT_COLLECTION="all" ;;
+  *) DEFAULT_COLLECTION="pgr" ;;
+esac
+
+COLLECTION="${QMDP_COLLECTION:-$DEFAULT_COLLECTION}"
 CANDIDATES="${QMDP_CANDIDATE_LIMIT:-8}"
 export QMD_RERANK_CONTEXT_SIZE="${QMD_RERANK_CONTEXT_SIZE:-1024}"
 
+resolve_qmd() {
+  if command -v qmd >/dev/null 2>&1; then
+    command -v qmd
+    return 0
+  fi
+  if [[ -x "$HOME/.local/share/mise/shims/qmd" ]]; then
+    printf '%s\n' "$HOME/.local/share/mise/shims/qmd"
+    return 0
+  fi
+  local candidate
+  candidate="$(find "$HOME/.local/share/mise/installs/node" -path '*/bin/qmd' -type f -executable 2>/dev/null | sort -V | tail -1 || true)"
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+QMD_BIN="${QMD_BIN:-$(resolve_qmd || true)}"
+if [[ -z "$QMD_BIN" ]]; then
+  echo "qmdp: qmd não encontrado. Instala @tobilu/qmd ou ativa mise." >&2
+  exit 127
+fi
+
+collection_args() {
+  if [[ "$COLLECTION" == "all" || -z "$COLLECTION" ]]; then
+    return 0
+  fi
+  printf '%s\n' -c "$COLLECTION"
+}
+
 usage() {
   cat <<EOF
-qmdp — QMD helper para o vault PGR
+$SELF — QMD helper para Obsidian
+
+Coleção ativa: ${COLLECTION}
+  qmdp          → PGR/trabalho
+  qmdpersonal   → Personal/privado
+  qmdobs        → PGR + Personal
 
 Uso:
-  qmdp s|search "termo exato"        Pesquisa textual/BM25 em PGR
-  qmdp v|vsearch "pergunta"          Pesquisa semântica em PGR
-  qmdp q|query "pergunta"            Pesquisa híbrida segura em PGR (-C ${CANDIDATES}, ctx ${QMD_RERANK_CONTEXT_SIZE})
-  qmdp get "#docid|qmd://..."        Mostrar documento/trecho
-  qmdp update                         Reindexar PGR e atualizar embeddings
-  qmdp status                         Estado do índice
+  $SELF s|search "termo exato"      Pesquisa textual/BM25
+  $SELF v|vsearch "pergunta"        Pesquisa semântica
+  $SELF q|query "pergunta"          Pesquisa híbrida segura (-C ${CANDIDATES}, ctx ${QMD_RERANK_CONTEXT_SIZE})
+  $SELF get "#docid|qmd://..."      Mostrar documento/trecho
+  $SELF update                       Reindexar e atualizar embeddings da coleção
+  $SELF status                       Estado do índice
 
 Exemplos:
   qmdp s "JDXCTA-1421"
   qmdp q "problema dos certificados no eEvidence"
+  qmdpersonal q "garantia da casa"
+  qmdobs q "onde falei sobre hábitos e trabalho profundo?"
   qmdp q $'lex: CDB eCodexParametersRI\nvec: decisões sobre CDB e eCodexParametersRI'
 
 Variáveis:
-  QMDP_COLLECTION=pgr
+  QMDP_COLLECTION=pgr|pessoal|all
   QMDP_CANDIDATE_LIMIT=8
   QMD_RERANK_CONTEXT_SIZE=1024
+  QMD_BIN=/caminho/para/qmd
 EOF
 }
 
 cmd="${1:-help}"
 shift || true
+mapfile -t col_args < <(collection_args)
 
 case "$cmd" in
   s|search)
-    qmd search -c "$COLLECTION" "$@"
+    "$QMD_BIN" search "${col_args[@]}" "$@"
     ;;
   v|vsearch|vector)
-    qmd vsearch -c "$COLLECTION" "$@"
+    "$QMD_BIN" vsearch "${col_args[@]}" "$@"
     ;;
   q|query)
-    qmd query -c "$COLLECTION" -C "$CANDIDATES" "$@"
+    "$QMD_BIN" query "${col_args[@]}" -C "$CANDIDATES" "$@"
     ;;
   get)
-    qmd get "$@"
+    "$QMD_BIN" get "$@"
     ;;
   update)
-    qmd update
-    qmd embed -c "$COLLECTION"
+    "$QMD_BIN" update
+    if [[ "$COLLECTION" == "all" || -z "$COLLECTION" ]]; then
+      "$QMD_BIN" embed
+    else
+      "$QMD_BIN" embed -c "$COLLECTION"
+    fi
     ;;
   status)
-    qmd status
+    "$QMD_BIN" status
     ;;
   help|-h|--help)
     usage
     ;;
   *)
     # Atalho: sem subcomando reconhecido, assume query.
-    qmd query -c "$COLLECTION" -C "$CANDIDATES" "$cmd" "$@"
+    "$QMD_BIN" query "${col_args[@]}" -C "$CANDIDATES" "$cmd" "$@"
     ;;
 esac
