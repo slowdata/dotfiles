@@ -15,8 +15,8 @@ Gere os dois vaults Obsidian sincronizados via Syncthing entre máquinas e telem
 
 | Vault | Caminho | Notas | Contexto |
 |-------|---------|-------|---------|
-| **Personal** | `~/Sync/Obsidian/Personal/` | ~40 | Vida pessoal |
-| **PGR** | `~/Sync/Obsidian/PGR/` | ~329 | Trabalho na Procuradoria-Geral da República |
+| **Personal** | `~/Sync/Obsidian/Personal/` | ~55 | Vida pessoal |
+| **PGR** | `~/Sync/Obsidian/PGR/` | ~429 | Trabalho ativo na Procuradoria-Geral da República |
 
 ## Vault Personal — Estrutura
 
@@ -45,10 +45,10 @@ Personal/
 ---
 tags:
   -
-date: {{date}}
+date: <% tp.date.now("YYYY-MM-DD") %>
 ---
 
-# {{title}}
+# <% tp.file.title %>
 ```
 
 **Plugins**: Dataview, Templater, Minimal Settings
@@ -58,81 +58,60 @@ date: {{date}}
 ```
 PGR/
 ├── Home.md                 — dashboard / ponto de entrada principal
-├── 00_Inbox/               — captura rápida
-├── 01_Projetos/            — 215 notas
-│   ├── eEdes/              — 117 notas ★ MAIOR PROJETO
+├── 00_Daily/               — diário PGR leve (índice do dia)
+├── 00_Inbox/               — captura rápida / temporária
+├── 01_Projetos/            — projetos e documentação viva
+│   ├── eEdes/              — eEvidence / JUDEX RI / e-CODEX ★ projeto crítico
 │   │   ├── Certificados/
 │   │   ├── Documentação/
 │   │   ├── Notas Técnicas/
 │   │   ├── Relatorios/
 │   │   ├── Resources/
-│   │   ├── Reuniões/
+│   │   ├── Reunioes/       — reuniões do projeto (sem acento; pasta existente)
 │   │   └── Sessões Técnicas/
-│   ├── NSIMP/              — 50 notas
-│   │   ├── Emails/
-│   │   ├── Notas de Análise/
-│   │   ├── Reuniões/
-│   │   └── Sessões Técnicas/
-│   ├── ADC/                — 18 notas
-│   ├── Apostila/           — 10 notas (material formação)
-│   ├── Progest/            — 8 notas
-│   ├── goAML/              — 6 notas
-│   └── SIMP/               — 5 notas
-├── 02_Reuniões/            — reuniões gerais
-├── 03_Tarefas/             — tarefas e ações
-├── 04_Biblioteca_Técnica/
-│   ├── Snippets/           — biblioteca de procedimentos reutilizáveis
-│   │   ├── INDEX_Snippets.md
-│   │   └── Gestão_Executantes/
-│   ├── Listagens/          — 7 notas, PAPs
-│   ├── Relatorio_Anual_PGR/ — 11 notas
-│   └── DCIAP/              — 3 referências técnicas
+│   ├── NSIMP/
+│   ├── ADC/
+│   ├── Progest/
+│   ├── SIMP/
+│   ├── Microservicos/
+│   └── Parracho/
+├── 02_Reuniões/            — reuniões sem projeto claro
+├── 04_Biblioteca_Técnica/  — procedimentos, snippets, documentação técnica
 ├── 05_Trabalho_Realizado/  — trabalho concluído
 ├── 06_Infraestrutura/      — documentação infra
 ├── 07_Pessoal_PGR/         — SIADAP_2026 e pessoal
-├── 08_Historico/
-├── Formação/               — formação profissional
+├── 08_Historico/           — arquivo histórico / limpezas
+├── 09_HELPDESK/            — tickets, pedidos e padrões helpdesk
+│   ├── Tickets/
+│   ├── Pedidos/
+│   └── Padroes/
 └── Templates/
-    ├── Nova Reunião.md
-    ├── Novo Projeto.md
-    ├── Novo Padrão Reutilizável.md
-    └── Novo Servidor PGR.md
+    ├── Daily.md
+    ├── Nota.md
+    ├── Reunião.md
+    ├── Ticket.md
+    ├── Pedido Email.md
+    ├── Projeto.md
+    ├── Padrão.md
+    └── Servidor.md
 ```
 
-**Plugins**: Dataview, Kanban, Templater, Beautitab, Importer, Style Settings, Minimal Settings
+**Plugins**: Dataview, Kanban, Templater, Beautitab, Importer, Style Settings, Minimal Settings. Daily Notes ativo em `00_Daily/` com template `Templates/Daily.md`; Templater processa variáveis `<% tp.date.now(...) %>` e `<% tp.file.title %>`.
 
 ### Templates PGR
 
-**Nova Reunião**:
-```yaml
----
-tags: reuniao, projeto/<projeto>
-data: YYYY-MM-DD
-presentes:
-  -
----
-## <título> — Reunião
-### 📌 Notas
--
-### ✅ Ações
-- [ ]
-```
+Templates simples — um por tipo, só para não intimidar na criação manual:
 
-**Novo Projeto**:
-```yaml
----
-tags: projeto/<nome>
-created: YYYY-MM-DD
-status: ativo
----
-# Projeto: <título>
-## ✍️ Descrição
-## 📅 Datas importantes
-- Início:
-- Entregas:
-```
+- `Templates/Daily.md`: `Foco`, `Reuniões`, `Notas`, `Ações TickTick`.
+- `Templates/Reunião.md`: `Objetivo`, `Notas`, `Decisões`, `Ações TickTick`, `Fontes`.
+- `Templates/Nota.md`: `Notas`, `Links`.
+- `Templates/Ticket.md`: `Pedido`, `Diagnóstico`, `Feito`, `Resultado`, `Ações TickTick`.
+- `Templates/Pedido Email.md`: `Pedido`, `Contexto`, `Resposta / resultado`, `Ações TickTick`.
+- `Templates/Projeto.md`, `Templates/Padrão.md`, `Templates/Servidor.md`: versões curtas, sem frontmatter pesado.
 
-**Novo Servidor PGR**: frontmatter com `name, env, type, ip, url, user, pass, notes, tags` + bloco DataviewJS que renderiza info e credenciais automaticamente.
+Notas geradas por IA podem ser mais ricas e bonitas: callouts Obsidian (`[!summary]`, `[!important]`, `[!todo]`, `[!question]`), resumo, subtítulos, decisões, follow-ups, fontes e palavras-chave. A regra de simplicidade aplica-se ao template vazio, não ao resultado sintetizado.
+
+Usar variáveis Templater simples nos templates: `<% tp.date.now("YYYY-MM-DD") %>` e `<% tp.file.title %>`. Evitar `{{title}}`, que não é fiável no Obsidian core Templates.
 
 ## Contexto dos Projetos PGR
 
@@ -141,6 +120,46 @@ status: ativo
 **NSIMP** — projeto com notas de análise e sessões técnicas
 **ADC** — projeto com recursos e reuniões
 **Progest** / **goAML** / **SIMP** / **Apostila** — projetos ativos no vault
+
+## Sistema ativo PGR — regras atuais
+
+- **Obsidian PGR é o destino ativo para notas de trabalho.**
+- **Logseq está congelado**: usar só como arquivo/consulta/migração, salvo pedido explícito do utilizador.
+- **TickTick é o task manager**: não criar um sistema paralelo de tarefas no Obsidian. Secções “Ações para TickTick” são staging temporário.
+- **Fontes brutas de reuniões** ficam em `/home/dias/Sync/Reunioes/` (`.opus`, `.wav` temporário, `.md` transcrição).
+- **Daily note** (`00_Daily/YYYY-MM-DD.md`) é índice leve do dia, não repositório de detalhes.
+- **Reunião de projeto** vai para a pasta de reuniões já existente do projeto (`Reuniões` ou `Reunioes`).
+- **Reunião sem projeto claro** vai para `02_Reuniões/YYYY-MM-DD - título.md`.
+- **Ticket Helpdesk** vai para `09_HELPDESK/Tickets/`.
+- **Pedido por email/outra origem** vai para `09_HELPDESK/Pedidos/`.
+- **Padrão reutilizável** vai para `09_HELPDESK/Padroes/` ou `04_Biblioteca_Técnica/Snippets/` conforme o contexto.
+
+## QMD — pesquisa local PGR
+
+QMD está instalado como camada local de pesquisa para notas Markdown.
+
+- Coleção atual: `pgr` → `~/Sync/Obsidian/PGR/**/*.md`
+- Contexto: “Vault Obsidian PGR: trabalho, reuniões, tickets, projetos e documentação”
+- Embeddings criados com `qmd embed`.
+- Helper local: `qmdp` (wrapper para usar sempre a coleção `pgr`, candidate limit seguro e `QMD_RERANK_CONTEXT_SIZE=1024`).
+
+Uso recomendado:
+
+```bash
+qmdp s "JDXCTA-1421"                         # textual/BM25 — IDs, nomes, siglas
+qmdp v "problema de certificados no connector" # semântico
+qmdp q "o que ficou decidido sobre CDB?"        # híbrido seguro no PGR
+qmdp get "#docid"                              # abrir resultado
+qmdp update                                    # qmd update + qmd embed -c pgr
+```
+
+Para perguntas importantes em PT, preferir query estruturada:
+
+```bash
+qmdp q $'lex: CDB eCodexParametersRI\nvec: decisões sobre CDB e eCodexParametersRI'
+```
+
+Se `qmdp` não existir, usar `qmd ... -c pgr`, com `QMD_RERANK_CONTEXT_SIZE=1024` ou `--no-rerank` se houver erro de VRAM.
 
 ## Obsidian CLI
 
@@ -162,6 +181,17 @@ CLI oficial disponível em `/usr/bin/obsidian` (requer Obsidian a correr).
 
 ### Pesquisar notas
 
+Para o vault PGR, preferir QMD quando a pergunta for “onde está aquela informação?”:
+
+```bash
+qmdp s "JDXCTA-1421"                         # termos exatos, tickets, IDs, nomes
+qmdp v "problema de certificados no connector" # semântico
+qmdp q "que decisão tomámos sobre protocol 3?"  # híbrido
+qmdp get "#docid"                              # ler resultado
+```
+
+Usar Obsidian CLI quando for necessário interagir com o vault aberto, propriedades ou caminhos específicos:
+
 ```bash
 # Pesquisa rápida (só nomes de ficheiro)
 obsidian search query="texto" vault=PGR
@@ -170,20 +200,24 @@ obsidian search:context query="texto" vault=PGR
 # Limitar a pasta
 obsidian search query="texto" path="01_Projetos/eEdes" vault=PGR
 ```
-Fallback para Grep quando precisar de regex ou pesquisa cross-vault.
+Fallback para Grep/Ripgrep quando precisar de regex, pesquisa cross-vault ou quando QMD/CLI não estiverem disponíveis.
 
 ### Criar notas
 
-1. Identificar vault e pasta correta
-2. PGR reuniões → `01_Projetos/<projeto>/Reuniões/` ou `02_Reuniões/`
-3. PGR projetos → `01_Projetos/<projeto>/`
-4. Padrões reutilizáveis → `04_Biblioteca_Técnica/Snippets/` com template `Novo Padrão Reutilizável`
-5. Personal → pasta da categoria correspondente
-6. Confirmar caminho com o utilizador antes de criar se houver dúvida
+1. Identificar vault e pasta correta.
+2. PGR daily → `00_Daily/YYYY-MM-DD.md` com template `Daily`.
+3. PGR reunião de projeto → pasta de reuniões já existente do projeto (`Reuniões` ou `Reunioes`), com template `Reunião`.
+4. PGR reunião sem projeto claro → `02_Reuniões/YYYY-MM-DD - título.md`.
+5. PGR ticket Helpdesk → `09_HELPDESK/Tickets/<numero> - assunto.md` com template `Ticket`.
+6. PGR pedido email/outra origem → `09_HELPDESK/Pedidos/YYYY-MM-DD - assunto.md` com template `Pedido Email`.
+7. Padrões reutilizáveis → `09_HELPDESK/Padroes/` ou `04_Biblioteca_Técnica/Snippets/`.
+8. PGR projetos/documentação viva → `01_Projetos/<projeto>/`.
+9. Personal → pasta da categoria correspondente.
+10. Confirmar caminho com o utilizador antes de criar se houver dúvida.
 
 ```bash
 # Criar nota com template
-obsidian create name="Reunião eEdes 2026-03-26" path="01_Projetos/eEdes/Reuniões/Reunião eEdes 2026-03-26.md" template="Nova Reunião" vault=PGR
+obsidian create name="2026-06-09 - eEvidence Weekly Meeting" path="01_Projetos/eEdes/Reunioes/2026-06-09 - eEvidence Weekly Meeting.md" template="Reunião" vault=PGR
 # Criar nota com conteúdo
 obsidian create name="nota" path="caminho/nota.md" content="..." vault=PGR
 ```
@@ -225,16 +259,14 @@ obsidian move path="origem.md" to="pasta_destino/" vault=PGR
 obsidian rename path="nota.md" name="novo nome" vault=PGR
 ```
 
-### Gerir tarefas
+### Tarefas
 
-```bash
-# Listar tarefas pendentes
-obsidian tasks todo vault=PGR
-# Listar por pasta com detalhe
-obsidian tasks path="03_Tarefas" todo verbose vault=PGR
-# Marcar tarefa como concluída
-obsidian task path="ficheiro.md" line=N done vault=PGR
-```
+O sistema principal de tarefas do Dias é **TickTick**.
+
+- Não criar tarefas como sistema de tracking no Obsidian por defeito.
+- Em notas de reunião/tickets, usar apenas secção “Ações para TickTick” como staging temporário.
+- Se houver ação real com compromisso, sugerir/enviar para TickTick; a nota Obsidian deve guardar contexto e decisão, não gerir execução.
+- `03_Tarefas/` é legado/apoio; não usar como destino principal sem pedido explícito.
 
 ### Daily notes
 

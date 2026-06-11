@@ -1,0 +1,63 @@
+#!/bin/bash
+
+set -euo pipefail
+
+COLLECTION="${QMDP_COLLECTION:-pgr}"
+CANDIDATES="${QMDP_CANDIDATE_LIMIT:-8}"
+export QMD_RERANK_CONTEXT_SIZE="${QMD_RERANK_CONTEXT_SIZE:-1024}"
+
+usage() {
+  cat <<EOF
+qmdp — QMD helper para o vault PGR
+
+Uso:
+  qmdp s|search "termo exato"        Pesquisa textual/BM25 em PGR
+  qmdp v|vsearch "pergunta"          Pesquisa semântica em PGR
+  qmdp q|query "pergunta"            Pesquisa híbrida segura em PGR (-C ${CANDIDATES}, ctx ${QMD_RERANK_CONTEXT_SIZE})
+  qmdp get "#docid|qmd://..."        Mostrar documento/trecho
+  qmdp update                         Reindexar PGR e atualizar embeddings
+  qmdp status                         Estado do índice
+
+Exemplos:
+  qmdp s "JDXCTA-1421"
+  qmdp q "problema dos certificados no eEvidence"
+  qmdp q $'lex: CDB eCodexParametersRI\nvec: decisões sobre CDB e eCodexParametersRI'
+
+Variáveis:
+  QMDP_COLLECTION=pgr
+  QMDP_CANDIDATE_LIMIT=8
+  QMD_RERANK_CONTEXT_SIZE=1024
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  s|search)
+    qmd search -c "$COLLECTION" "$@"
+    ;;
+  v|vsearch|vector)
+    qmd vsearch -c "$COLLECTION" "$@"
+    ;;
+  q|query)
+    qmd query -c "$COLLECTION" -C "$CANDIDATES" "$@"
+    ;;
+  get)
+    qmd get "$@"
+    ;;
+  update)
+    qmd update
+    qmd embed -c "$COLLECTION"
+    ;;
+  status)
+    qmd status
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    # Atalho: sem subcomando reconhecido, assume query.
+    qmd query -c "$COLLECTION" -C "$CANDIDATES" "$cmd" "$@"
+    ;;
+esac

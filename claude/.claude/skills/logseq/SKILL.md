@@ -1,21 +1,24 @@
 ---
 name: logseq
 description: >
-  Assistente para o Logseq do Dias (work journaling e reuniões PGR).
-  Usar quando o utilizador quer formatar notas de reunião do Logseq,
-  gerar relatórios para partilhar com colegas/chefe, ou consultar o diário de trabalho.
-  Graph em ~/Sync/Logseq/. Relatórios guardados em ~/Sync/Obsidian/PGR/01_Projetos/<projeto>/Relatorios/.
+  Assistente para o Logseq histórico do Dias. O Logseq está congelado/read-only:
+  usar sobretudo para consultar/migrar notas antigas de trabalho, reuniões e journals.
+  Novas notas de trabalho devem ir para Obsidian PGR, salvo pedido explícito.
+  Graph em ~/Sync/Logseq/. Relatórios formais continuam em ~/Sync/Obsidian/PGR/01_Projetos/<projeto>/Relatorios/ quando pedidos.
 ---
 
-# Logseq — Assistente de Reuniões e Journaling do Dias
+# Logseq — Arquivo Histórico de Reuniões e Journaling do Dias
 
-Gere o graph Logseq de trabalho do Dias, usado para journaling diário e notas de reuniões na PGR.
+O Logseq era usado para journaling diário e notas de reuniões PGR, mas está agora **congelado/read-only**. O sistema ativo de notas de trabalho passou a ser o **Obsidian PGR**.
+
+> Regra principal: **não criar novas notas/journals no Logseq por defeito**. Consultar, extrair e migrar para Obsidian quando necessário.
 
 ## Graph
 
 - **Localização**: `~/Sync/Logseq/`
-- **Journals**: `~/Sync/Logseq/journals/YYYY_MM_DD.md` (61 entradas, Nov 2025 – presente)
-- **Pages**: `~/Sync/Logseq/pages/` (15 páginas)
+- **Estado**: arquivo/read-only; não é o destino ativo para novas notas PGR
+- **Journals**: `~/Sync/Logseq/journals/YYYY_MM_DD.md`
+- **Pages**: `~/Sync/Logseq/pages/`
 - **Assets**: `~/Sync/Logseq/assets/` (imagens referenciadas nas notas)
 - **Formato de ficheiro journals**: `YYYY_MM_DD.md` (ex: `2026_02_27.md`)
 
@@ -58,20 +61,32 @@ Convenções:
 
 ## Como Ajudar
 
-### Ler notas de reunião do Logseq
+### Consultar notas antigas do Logseq
 
 1. Se o utilizador der uma data: abrir `journals/YYYY_MM_DD.md`
-2. Se der o nome do projeto/reunião: procurar com Grep no journal ou na page correspondente
+2. Se der o nome do projeto/reunião: procurar com Grep/QMD/ripgrep no journal ou na page correspondente
 3. Extrair a secção relevante (reunião específica dentro do journal do dia)
+4. Se a informação for útil para o sistema atual, propor ou criar nota equivalente no Obsidian PGR, não no Logseq
 
-### Formatar notas de reunião
+### Destino atual equivalente no Obsidian PGR
 
-Quando pedido para "formatar" ou "melhorar" notas brutas do Logseq:
+- Daily ativo: `~/Sync/Obsidian/PGR/00_Daily/YYYY-MM-DD.md`
+- Reunião de projeto: `~/Sync/Obsidian/PGR/01_Projetos/<Projeto>/Reunioes/YYYY-MM-DD - título.md`
+- Reunião sem projeto claro: `~/Sync/Obsidian/PGR/02_Reuniões/YYYY-MM-DD - título.md`
+- Tickets Helpdesk: `~/Sync/Obsidian/PGR/09_HELPDESK/Tickets/`
+- Pedidos por email/outra origem: `~/Sync/Obsidian/PGR/09_HELPDESK/Pedidos/`
+- Tarefas reais: Todoist
+- Fontes brutas de reuniões: `/home/dias/Sync/Reunioes/`
+
+### Formatar / migrar notas antigas de reunião
+
+Quando pedido para "formatar", "melhorar" ou migrar notas brutas do Logseq:
 1. Ler a nota original
 2. Manter todos os factos e decisões — **nunca inventar informação**
 3. Organizar em secções lógicas, corrigir typos, melhorar clareza
-4. Se houver ações a tomar, destacá-las claramente
-5. Devolver em markdown limpo (sem sintaxe Logseq) adequado para o utilizador
+4. Se houver ações reais, identificá-las para envio ao Todoist, não como tracking no Logseq
+5. Por defeito, criar/atualizar a nota final no Obsidian PGR no destino correto
+6. Só editar o Logseq se o utilizador pedir explicitamente ou confirmar que quer alterar o arquivo
 
 ### Gerar relatório para Obsidian
 
@@ -171,6 +186,8 @@ Resumo do que ficou decidido e próximos passos.
 ## Regras
 
 - Responder sempre em **Português (PT)**
+- **Logseq está congelado/read-only**: não criar novas notas ou journals no Logseq por defeito
+- Novas notas de trabalho, reuniões, tickets e dailies vão para **Obsidian PGR**
 - **Nunca inventar factos** — se a nota for ambígua, perguntar ao utilizador
 - Se houver imagens referenciadas (`../assets/...`), mencionar que existem mas não as incluir no relatório
 - O relatório vai para o Obsidian — usar sintaxe Obsidian (callouts, links `[[]]`), não sintaxe Logseq

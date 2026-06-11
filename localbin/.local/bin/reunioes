@@ -29,8 +29,10 @@ QC_SILENCE_MIN_DURATION="${QC_SILENCE_MIN_DURATION:-2}"
 QC_MAX_SILENCE_PERCENT="${QC_MAX_SILENCE_PERCENT:-60}"
 QC_MIN_MAX_VOLUME_DB="${QC_MIN_MAX_VOLUME_DB:--35}"
 ARCHIVE_INDEX="${ARCHIVE_INDEX:-$REUNIOES_DIR/.arquivo-audio.tsv}"
-LOGSEQ_DIR="${LOGSEQ_DIR:-$HOME/Sync/Logseq}"
-LOGSEQ_JOURNALS_DIR="${LOGSEQ_JOURNALS_DIR:-$LOGSEQ_DIR/journals}"
+OBSIDIAN_PGR_DIR="${OBSIDIAN_PGR_DIR:-$HOME/Sync/Obsidian/PGR}"
+OBSIDIAN_PERSONAL_DIR="${OBSIDIAN_PERSONAL_DIR:-$HOME/Sync/Obsidian/Personal}"
+TICKTICK_BIN="${TICKTICK_BIN:-ticktick}"
+TICKTICK_PROJECT_DEFAULT="${TICKTICK_PROJECT_DEFAULT:-Work}"
 REUNIOES_AI_CMD="${REUNIOES_AI_CMD:-pi}"
 REUNIOES_AI_PROVIDER="${REUNIOES_AI_PROVIDER:-}"
 REUNIOES_AI_MODEL="${REUNIOES_AI_MODEL:-}"
@@ -85,6 +87,21 @@ input() {
     if ( : </dev/tty ) 2>/dev/null; then read -rp "$prompt [$default] " value </dev/tty
     else read -rp "$prompt [$default] " value; fi
     printf '%s\n' "${value:-$default}"
+  fi
+}
+
+textarea() {
+  local prompt="$1" line value=""
+  if use_gum; then
+    gum write --header "$prompt" --placeholder "Opcional. Escreve contexto, nomes, foco do resumo, decisões/ações a procurar..." --height 8 </dev/tty
+  else
+    echo "$prompt" >/dev/tty
+    echo "Opcional. Escreve várias linhas; termina com uma linha só com '.'" >/dev/tty
+    while IFS= read -r line </dev/tty; do
+      [[ "$line" == "." ]] && break
+      value+="${line}"$'\n'
+    done
+    printf '%s' "$value"
   fi
 }
 
@@ -375,7 +392,7 @@ choose_audio_file() {
 }
 
 transcribe_pending() {
-  local audio key lang archive model chunks output
+  local audio key lang archive model chunks output hints
   audio="$(choose_audio_file "Áudio para transcrever")" || { pause; return; }
   key="$(key_from_path "$audio")"
   output="$(md_for_key "$key")"
@@ -389,6 +406,10 @@ transcribe_pending() {
     TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="$lang" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-audio "$audio" "$output"
   else
     TRANSCRICOES_DIR="$TRANSCRICOES_DIR" OPUS_DIR="$OPUS_DIR" ARCHIVE_INDEX="$ARCHIVE_INDEX" WHISPER_MODEL="$model" WHISPER_LANGUAGE="" CHUNK_SECONDS="$chunks" ARCHIVE_OPUS="$archive" transcrever-audio "$audio" "$output"
+  fi
+  if [[ -f "$output" ]] && confirm "Gerar rascunho Obsidian com IA agora?"; then
+    hints="$(textarea "Indicações opcionais para o agente IA desta reunião")"
+    draft_obsidian_note_ai "$output" "" "$hints"
   fi
   pause
 }
@@ -407,45 +428,94 @@ choose_transcription_file() {
   choose "$prompt" "${files[@]}"
 }
 
-run_ai_sanitize() {
-  local md="$1" output="$2" key sys prompt rc
+audio_for_key() {
+  local key="$1" opus wav
+  opus="$(opus_for_key "$key")"
+  wav="$(wav_for_key "$key")"
+  if [[ -f "$opus" ]]; then printf '%s' "$opus"; elif [[ -f "$wav" ]]; then printf '%s' "$wav"; fi
+}
+
+ai_cmd_base() {
+  local -n _arr="$1"
+  _arr=("$REUNIOES_AI_CMD" -p --no-tools --no-context-files --no-session --no-extensions --no-skills --no-prompt-templates)
+  [[ -n "$REUNIOES_AI_PROVIDER" ]] && _arr+=(--provider "$REUNIOES_AI_PROVIDER")
+  [[ -n "$REUNIOES_AI_MODEL" ]] && _arr+=(--model "$REUNIOES_AI_MODEL")
+  [[ -n "$REUNIOES_AI_THINKING" ]] && _arr+=(--thinking "$REUNIOES_AI_THINKING")
+}
+
+run_ai_obsidian_draft() {
+  local md="$1" output="$2" hints="${3:-}" key audio sys prompt rc extra_hints=""
   local ai_cmd=()
   [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
   has "$REUNIOES_AI_CMD" || { err "Comando de IA não encontrado: $REUNIOES_AI_CMD"; return 1; }
   mkdir -p "$(dirname "$output")"
   key="$(key_from_path "$md")"
-  sys="És assistente de reuniões técnicas da PGR. Transformas transcrições cruas com timestamps e erros de reconhecimento de fala em notas limpas para Logseq, em ${REUNIOES_AI_LANG}. Corriges termos técnicos óbvios, mas NUNCA inventas factos. Se a gravação estiver incompleta, assinalas isso claramente. Devolves SÓ os bullets Logseq, sem preâmbulo, sem cercas de código."
-  prompt="$(cat <<EOF
-Sanitiza/resume a transcrição anexada e gera notas prontas a colar dentro da entrada Logseq da reunião.
+  audio="$(audio_for_key "$key")"
+  sys="És assistente de reuniões técnicas da PGR. Transformas transcrições cruas com timestamps e erros de reconhecimento de fala numa nota Obsidian limpa, em ${REUNIOES_AI_LANG}. O sistema ativo é Obsidian + TickTick. Logseq está congelado. NUNCA inventas factos. Devolves SÓ Markdown final, sem preâmbulo."
+  if [[ -n "$hints" ]]; then
+    extra_hints="$(cat <<EOF
 
-Contexto provável: reuniões eEvidence/e-CODEX/PGR. Termos frequentes: PT_PGR, Domibus, CMT, P-Modes, CRL, CCDB, CDB, mTLS, EPOC, EPOC-PR, XA, COM_ACC_XA, ACCEPT, QA/ACC, production, acceptance, Service Provider.
-
-Formato obrigatório:
-\t- #### Notas sanitizadas por IA
-\t\t- Fontes:
-\t\t\t- Transcrição: \`${md}\`.
-\t\t- Qualidade / limites:
-\t\t\t- Diz se a transcrição parece completa ou parcial.
-\t- #### TL;DR
-\t\t- 4 a 8 bullets densos.
-\t- #### Pontos discutidos
-\t\t- Agrupa por tema, com sub-bullets.
-\t- #### Ações / follow-up
-\t\t- Lista apenas ações suportadas pela transcrição; se não houver ações claras, escreve que não ficaram ações claras.
-
-Regras:
-- Mantém a indentação Logseq com tabs: primeiro nível com uma tab antes de "-", segundo nível com duas tabs, etc.
-- Não incluas timestamps salvo quando ajudam a localizar uma citação/ponto duvidoso.
-- Corrige nomes/termos técnicos quando for óbvio, mas marca incertezas com "provável".
-- Não inventes participantes, decisões, prazos ou ações.
-- Não escrevas nada fora dos bullets.
+Indicações do Dias para esta nota (prioritárias, mas sem inventar factos):
+${hints}
 EOF
 )"
-  ai_cmd=("$REUNIOES_AI_CMD" -p --no-tools --no-context-files --no-session --no-extensions --no-skills --no-prompt-templates)
-  [[ -n "$REUNIOES_AI_PROVIDER" ]] && ai_cmd+=(--provider "$REUNIOES_AI_PROVIDER")
-  [[ -n "$REUNIOES_AI_MODEL" ]] && ai_cmd+=(--model "$REUNIOES_AI_MODEL")
-  [[ -n "$REUNIOES_AI_THINKING" ]] && ai_cmd+=(--thinking "$REUNIOES_AI_THINKING")
-  info "A sanitizar com IA via $REUNIOES_AI_CMD: $key"
+  fi
+  prompt="$(cat <<EOF
+Cria uma nota Obsidian PGR a partir da transcrição anexada.
+
+Fonte:
+- Transcrição: ${md}
+- Áudio: ${audio:-desconhecido}${extra_hints}
+
+Formato recomendado para NOTA GERADA (os templates continuam mínimos):
+---
+tipo: reuniao
+data: "<data YYYY-MM-DD inferida do nome do ficheiro>"
+projeto: "<projeto inferido ou vazio>"
+estado: sintetizada
+fonte_transcricao: "${md}"
+audio: "${audio}"
+tags: [reuniao]
+---
+
+# <título>
+
+> [!summary] Resumo
+> - 4 a 8 bullets densos com o essencial.
+
+## Objetivo
+- Para que serviu a reunião.
+
+## Pontos principais
+- Agrupa por tema, com subtítulos só quando ajudar.
+
+> [!important] Decisões / orientações
+> - Só decisões suportadas pela transcrição.
+
+> [!todo] Ações TickTick
+> - Ações concretas, começando por verbo. Se não houver ações claras, escreve "Sem ações claras na transcrição.".
+
+> [!question] Follow-ups / dúvidas
+> - Pontos a confirmar.
+
+## Fontes
+- Transcrição: \`${md}\`
+- Áudio: \`${audio}\`
+
+## Palavras-chave
+- 
+
+Regras:
+- Não mencionar Logseq nem Todoist.
+- Não deixar placeholders vazios se houver informação.
+- Corrige termos técnicos óbvios, mas marca incertezas com "provável".
+- A nota gerada pode e deve ser bonita: callouts, resumo, subtítulos e agregação do importante.
+- Não exagerar em frontmatter; a complexidade deve estar no conteúdo, não no template.
+- Mantém screenshots/embeds fora se não existirem na transcrição.
+EOF
+)"
+  ai_cmd_base ai_cmd
+  info "A gerar rascunho Obsidian com IA: $key"
   set +e
   "${ai_cmd[@]}" --system-prompt "$sys" "@$md" "$prompt" > "$output.tmp" 2> "$output.err"
   rc=$?
@@ -461,37 +531,283 @@ EOF
   return 1
 }
 
-sanitize_transcription_ai() {
-  local md="${1:-}" output="${2:-}" key ts interactive=false
+obsidian_meeting_notes() {
+  local roots=()
+  [[ -d "$OBSIDIAN_PGR_DIR/01_Projetos" ]] && roots+=("$OBSIDIAN_PGR_DIR/01_Projetos")
+  [[ -d "$OBSIDIAN_PGR_DIR/02_Reuniões" ]] && roots+=("$OBSIDIAN_PGR_DIR/02_Reuniões")
+  (( ${#roots[@]} > 0 )) || return 0
+  find "${roots[@]}" -type f -name '*.md' -printf '%T@\t%p\n' 2>/dev/null \
+    | awk -F '\t' '$2 ~ /\/(Reunioes|Reuniões)\// || $2 ~ /\/02_Reuniões\// { print }' \
+    | sort -nr | head -150 | cut -f2-
+}
+
+choose_obsidian_meeting_note() {
+  local prompt="$1"
+  mapfile -t files < <(obsidian_meeting_notes)
+  if (( ${#files[@]} == 0 )); then warn "Não encontrei notas de reunião no Obsidian PGR."; return 1; fi
+  choose "$prompt" "${files[@]}"
+}
+
+note_date() {
+  local note="$1" base
+  base="$(basename "$note")"
+  if [[ "$base" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2}) ]]; then printf '%s' "${BASH_REMATCH[1]}"; else date +%F; fi
+}
+
+ensure_daily_note() {
+  local day="$1" daily="$OBSIDIAN_PGR_DIR/00_Daily/${day}.md"
+  if [[ ! -f "$daily" ]]; then
+    mkdir -p "$(dirname "$daily")"
+    cat > "$daily" <<EOF
+---
+tipo: daily
+data: "${day}"
+tags: [daily]
+---
+
+# ${day}
+
+## Foco
+- 
+
+## Reuniões
+- 
+
+## Notas
+- 
+
+## Ações TickTick
+- 
+EOF
+  fi
+  printf '%s' "$daily"
+}
+
+append_daily_entry() {
+  local note="$1" md="${2:-}" day daily title link line
+  day="$(note_date "$note")"
+  daily="$(ensure_daily_note "$day")"
+  title="$(basename "${note%.md}")"
+  link="[[${title}|${title}]]"
+  if grep -qF "$link" "$daily"; then
+    info "Daily já contém link: $link"
+    return 0
+  fi
+  line="- ${link} — nota de reunião sintetizada/atualizada."
+  [[ -n "$md" ]] && line+=" Fonte: \`${md}\`."
+  {
+    echo
+    echo "## Reuniões processadas"
+    echo "$line"
+  } >> "$daily"
+  info "Entrada adicionada à Daily: $daily"
+}
+
+run_ai_obsidian_merge() {
+  local md="$1" note="$2" output="$3" hints="${4:-}" key audio sys prompt rc extra_hints=""
+  local ai_cmd=()
+  [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
+  [[ -f "$note" ]] || { err "Nota Obsidian não existe: $note"; return 1; }
+  has "$REUNIOES_AI_CMD" || { err "Comando de IA não encontrado: $REUNIOES_AI_CMD"; return 1; }
+  mkdir -p "$(dirname "$output")"
+  key="$(key_from_path "$md")"
+  audio="$(audio_for_key "$key")"
+  sys="És assistente de reuniões técnicas da PGR. Fazes merge de uma transcrição crua numa nota Obsidian existente. Preservas factos, screenshots/embeds e frontmatter útil. O sistema ativo é Obsidian + TickTick. Logseq está congelado. NUNCA inventas factos. Devolves SÓ a nota Obsidian completa em Markdown."
+  if [[ -n "$hints" ]]; then
+    extra_hints="$(cat <<EOF
+
+Indicações do Dias para este merge (prioritárias, mas sem inventar factos):
+${hints}
+EOF
+)"
+  fi
+  prompt="$(cat <<EOF
+Atualiza a NOTA OBSIDIAN existente com a TRANSCRIÇÃO anexada.${extra_hints}
+
+Objetivo:
+- Simplificar e agregar o importante.
+- Não perder nada importante.
+- Preservar screenshots/embeds já existentes na nota.
+- Preservar frontmatter e atualizar, se necessário:
+  estado: "sintetizada"
+  fonte_transcricao: "${md}"
+  audio: "${audio}"
+- Usar apenas Obsidian + TickTick.
+
+Estrutura recomendada para NOTA GERADA (os templates continuam mínimos):
+# Título
+
+> [!summary] Resumo
+> - Essencial da reunião.
+
+## Objetivo
+## Pontos principais
+
+> [!important] Decisões / orientações
+> - Decisões suportadas pela transcrição.
+
+> [!todo] Ações TickTick
+> - Ações reais.
+
+> [!question] Follow-ups / dúvidas
+> - Pontos a confirmar.
+
+## Fontes
+## Palavras-chave
+
+Regras:
+- Substituir qualquer "Ações para Todoist" ou "Ações para TickTick" por "Ações TickTick".
+- Remover referências a Logseq como destino. Manter Logseq só se for fonte histórica explícita.
+- Não apagar imagens/embeds existentes.
+- Não deixar placeholders vazios se houver conteúdo na transcrição.
+- A nota gerada pode e deve ser bonita: callouts, resumo, subtítulos e agregação do importante.
+- Não transformar isto num template pesado; enriquecer só a nota final.
+- Não escrever nada fora da nota final.
+EOF
+)"
+  ai_cmd_base ai_cmd
+  info "A fazer merge Obsidian com IA: $key -> $(basename "$note")"
+  set +e
+  "${ai_cmd[@]}" --system-prompt "$sys" "@$note" "@$md" "$prompt" > "$output.tmp" 2> "$output.err"
+  rc=$?
+  set -e
+  if [[ -s "$output.tmp" ]]; then
+    if (( rc != 0 )); then warn "IA saiu com código $rc, mas devolveu conteúdo; vou guardar."; fi
+    mv -- "$output.tmp" "$output"
+    rm -f -- "$output.err"
+    return 0
+  fi
+  err "A IA não devolveu conteúdo. Log: $output.err"
+  rm -f -- "$output.tmp"
+  return 1
+}
+
+draft_obsidian_note_ai() {
+  local md="${1:-}" output="${2:-}" hints="${3:-${REUNIOES_AI_HINTS:-}}" key ts interactive=false
   init_project_dirs
   if [[ -z "$md" ]]; then
     interactive=true
-    md="$(choose_transcription_file "Transcrição para sanitizar/resumir com IA")" || { pause; return; }
+    md="$(choose_transcription_file "Transcrição para gerar rascunho Obsidian")" || { pause; return; }
   fi
   [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
+  if [[ "$interactive" == true ]]; then
+    hints="$(textarea "Indicações opcionais para o agente IA desta reunião")"
+  fi
   key="$(key_from_path "$md")"
   ts="$(date +%Y%m%d-%H%M%S)"
-  output="${output:-$BACKUP_DIR/${key}.logseq-ia-${ts}.md}"
+  output="${output:-$BACKUP_DIR/${key}.obsidian-ia-${ts}.md}"
   if [[ -e "$output" ]]; then
     if [[ "$interactive" == true ]]; then confirm "Já existe $output. Sobrescrever?" || return 0
     else err "Destino já existe: $output"; return 1; fi
   fi
-  run_ai_sanitize "$md" "$output" || { [[ "$interactive" == true ]] && pause; return 1; }
-  info "Notas Logseq geradas: $output"
+  run_ai_obsidian_draft "$md" "$output" "$hints" || { [[ "$interactive" == true ]] && pause; return 1; }
+  info "Rascunho Obsidian gerado: $output"
   if [[ "$interactive" == true ]]; then
-    if confirm "Copiar para o clipboard para colar no Logseq?"; then
+    if confirm "Copiar para o clipboard?"; then
       copy_to_clipboard "$output" && info "Copiado para o clipboard." || warn "Não encontrei wl-copy/xclip/xsel/pbcopy. Copia manualmente: $output"
     fi
-    if confirm "Mostrar resultado agora?"; then
-      echo
-      sed -n '1,220p' "$output"
-      echo
-    fi
+    if confirm "Mostrar resultado agora?"; then sed -n '1,220p' "$output"; fi
     pause
   else
     printf '%s\n' "$output"
   fi
 }
+
+merge_transcription_into_obsidian() {
+  local md="${1:-}" note="${2:-}" key ts draft backup hints="${3:-${REUNIOES_AI_HINTS:-}}" interactive=false
+  init_project_dirs
+  if [[ -z "$md" ]]; then interactive=true; md="$(choose_transcription_file "Transcrição a juntar à nota Obsidian")" || { pause; return; }; fi
+  if [[ -z "$note" ]]; then interactive=true; note="$(choose_obsidian_meeting_note "Nota Obsidian existente")" || { pause; return; }; fi
+  [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
+  [[ -f "$note" ]] || { err "Nota Obsidian não existe: $note"; return 1; }
+  if [[ "$interactive" == true ]]; then hints="$(textarea "Indicações opcionais para o agente IA neste merge")"; fi
+  key="$(key_from_path "$md")"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  draft="$BACKUP_DIR/${key}.obsidian-merge-${ts}.md"
+  run_ai_obsidian_merge "$md" "$note" "$draft" "$hints" || { pause; return 1; }
+  info "Draft de merge gerado: $draft"
+  if [[ "$interactive" != true ]] || confirm "Aplicar este merge à nota Obsidian?"; then
+    backup="$BACKUP_DIR/$(basename "${note%.md}").obsidian-before-merge-${ts}.md"
+    cp --preserve=timestamps -- "$note" "$backup"
+    cp -- "$draft" "$note"
+    info "Nota atualizada: $note"
+    info "Backup: $backup"
+    if [[ "$interactive" == true ]]; then
+      confirm "Adicionar entrada na Daily?" && append_daily_entry "$note" "$md"
+      confirm "Extrair ações para TickTick agora?" && create_ticktick_tasks_from_file "$note"
+    fi
+  else
+    warn "Merge não aplicado. Draft mantido: $draft"
+  fi
+  [[ "$interactive" == true ]] && pause
+}
+
+extract_ticktick_tasks() {
+  local note="$1" output="$2" sys prompt rc
+  local ai_cmd=()
+  [[ -f "$note" ]] || { err "Nota não existe: $note"; return 1; }
+  has "$REUNIOES_AI_CMD" || { err "Comando de IA não encontrado: $REUNIOES_AI_CMD"; return 1; }
+  mkdir -p "$(dirname "$output")"
+  sys="Extrais ações concretas de notas de reunião PGR para TickTick. Devolves só uma lista de tarefas, uma por linha, sem explicações."
+  prompt="$(cat <<EOF
+Lê a nota Obsidian anexada e extrai apenas ações reais para TickTick.
+
+Regras:
+- Uma tarefa por linha.
+- Cada linha começa por "- ".
+- Começar com verbo no infinitivo/imperativo.
+- Incluir contexto mínimo entre parêntesis quando necessário.
+- Não criar tarefas vagas como "acompanhar" sem objeto claro.
+- Se não houver ações reais, devolve exatamente: Sem ações.
+EOF
+)"
+  ai_cmd_base ai_cmd
+  set +e
+  "${ai_cmd[@]}" --system-prompt "$sys" "@$note" "$prompt" > "$output.tmp" 2> "$output.err"
+  rc=$?
+  set -e
+  if [[ -s "$output.tmp" ]]; then
+    if (( rc != 0 )); then warn "IA saiu com código $rc, mas devolveu conteúdo; vou guardar."; fi
+    mv -- "$output.tmp" "$output"
+    rm -f -- "$output.err"
+    return 0
+  fi
+  err "A IA não devolveu ações. Log: $output.err"
+  rm -f -- "$output.tmp"
+  return 1
+}
+
+ticktick_project_id() {
+  local name="${1:-$TICKTICK_PROJECT_DEFAULT}"
+  "$TICKTICK_BIN" project list --json 2>/dev/null | python -c 'import json,sys; name=sys.argv[1].lower(); data=json.load(sys.stdin); print(next((p.get("id", "") for p in data if str(p.get("name", "")).lower()==name), ""))' "$name"
+}
+
+create_ticktick_tasks_from_file() {
+  local note="${1:-}" ts tasks_file project_name project_id line title created=0
+  if [[ -z "$note" ]]; then note="$(choose_obsidian_meeting_note "Nota Obsidian para extrair ações")" || { pause; return; }; fi
+  [[ -f "$note" ]] || { err "Nota não existe: $note"; return 1; }
+  has "$TICKTICK_BIN" || { err "TickTick CLI não encontrado: $TICKTICK_BIN"; return 1; }
+  ts="$(date +%Y%m%d-%H%M%S)"
+  tasks_file="$BACKUP_DIR/$(basename "${note%.md}").ticktick-${ts}.txt"
+  extract_ticktick_tasks "$note" "$tasks_file" || { pause; return 1; }
+  echo; sed -n '1,120p' "$tasks_file"; echo
+  if grep -qxF "Sem ações." "$tasks_file"; then warn "Sem ações reais para criar."; pause; return 0; fi
+  confirm "Criar estas tarefas no TickTick?" || { info "Lista guardada: $tasks_file"; pause; return 0; }
+  project_name="$(input "Projeto TickTick" "$TICKTICK_PROJECT_DEFAULT")"
+  project_id="$(ticktick_project_id "$project_name" || true)"
+  [[ -n "$project_id" ]] || { err "Projeto TickTick não encontrado ou CLI não autenticado: $project_name"; pause; return 1; }
+  while IFS= read -r line; do
+    [[ "$line" == "- "* ]] || continue
+    title="${line#- }"
+    [[ -n "$title" ]] || continue
+    "$TICKTICK_BIN" task create --project "$project_id" --title "$title" --content "Fonte: $note" --tags "pgr,reunioes" >/dev/null
+    created=$((created + 1))
+  done < "$tasks_file"
+  info "Tarefas criadas no TickTick: $created"
+  pause
+}
+
+sanitize_transcription_ai() { draft_obsidian_note_ai "$@"; }
 
 all_audio_files() {
   init_project_dirs
@@ -884,7 +1200,9 @@ Comandos:
   reunioes status
   reunioes transcrever
   reunioes refazer
-  reunioes sanitizar   # gera notas Logseq com IA/Pi a partir de uma transcrição
+  reunioes obsidian-merge  # junta transcrição a nota Obsidian existente
+  reunioes obsidian-draft  # gera rascunho Obsidian com IA/Pi
+  reunioes ticktick-acoes  # extrai ações de nota Obsidian para TickTick
   reunioes arquivar
   reunioes arquivar-tudo
   reunioes limpar
@@ -915,12 +1233,16 @@ transcriptions_menu() {
 notes_menu() {
   while true; do
     clear || true
-    style "🧠 Notas / Logseq"
+    style "🧠 Obsidian + TickTick"
     info "Projeto: $REUNIOES_DIR"; echo
     choice="$(choose "Escolhe" \
-      "Sanitizar/resumir transcrição com IA" "Voltar")"
+      "Juntar transcrição a nota Obsidian" "Gerar rascunho Obsidian com IA" \
+      "Extrair ações para TickTick" "Abrir TickTick TUI" "Voltar")"
     case "$choice" in
-      "Sanitizar/resumir transcrição com IA") sanitize_transcription_ai ;;
+      "Juntar transcrição a nota Obsidian") merge_transcription_into_obsidian ;;
+      "Gerar rascunho Obsidian com IA") draft_obsidian_note_ai ;;
+      "Extrair ações para TickTick") create_ticktick_tasks_from_file ;;
+      "Abrir TickTick TUI") if has ticktick-tui; then ticktick-tui; else err "ticktick-tui não encontrado"; pause; fi ;;
       "Voltar"|"") break ;;
     esac
   done
@@ -981,13 +1303,13 @@ main_menu() {
     style "🎙 Reuniões"
     info "Projeto: $REUNIOES_DIR"; echo
     choice="$(choose "Escolhe" \
-      "🎙 Gravar nova reunião" "📊 Ver estado" "📝 Transcrições" "🧠 Notas / Logseq" \
+      "🎙 Gravar nova reunião" "📊 Ver estado" "📝 Transcrições" "🧠 Obsidian + TickTick" \
       "🗄 Arquivo e limpeza" "🌐 Remoto / Telegram" "🔧 Utilitários" "Sair")"
     case "$choice" in
       "🎙 Gravar nova reunião") record_meeting ;;
       "📊 Ver estado") show_status; pause ;;
       "📝 Transcrições") transcriptions_menu ;;
-      "🧠 Notas / Logseq") notes_menu ;;
+      "🧠 Obsidian + TickTick") notes_menu ;;
       "🗄 Arquivo e limpeza") archive_menu ;;
       "🌐 Remoto / Telegram") remote_menu ;;
       "🔧 Utilitários") utilities_menu ;;
@@ -1005,7 +1327,9 @@ case "$cmd" in
   transcrever) transcribe_pending ;;
   refazer) retranscribe_audio ;;
   refazer-job) shift; retranscribe_job "$@" ;;
-  sanitizar|resumir) shift; sanitize_transcription_ai "$@" ;;
+  sanitizar|resumir|obsidian-draft) shift; draft_obsidian_note_ai "$@" ;;
+  obsidian-merge) shift; merge_transcription_into_obsidian "$@" ;;
+  ticktick-acoes|ticktick-actions) shift; create_ticktick_tasks_from_file "$@" ;;
   arquivar) archive_one ;;
   arquivar-tudo) archive_all ;;
   limpar) cleanup_wavs ;;
