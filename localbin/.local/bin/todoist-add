@@ -21,9 +21,16 @@ if [[ ${1:-} == "-h" || ${1:-} == "--help" || $# -eq 0 ]]; then
   exit 0
 fi
 
+if [[ -z ${TODOIST_API_TOKEN:-} && -f "$HOME/.config/secrets/env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$HOME/.config/secrets/env"
+  set +a
+fi
+
 if [[ -z ${TODOIST_API_TOKEN:-} ]]; then
   echo "Erro: variável TODOIST_API_TOKEN não definida." >&2
-  echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.zshrc.local" >&2
+  echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.config/secrets/env" >&2
   exit 1
 fi
 
@@ -86,6 +93,34 @@ fi
 if [[ -n $priority && ! $priority =~ ^[1-4]$ ]]; then
   echo "Erro: --priority tem de estar entre 1 e 4." >&2
   exit 1
+fi
+
+resolve_project_id() {
+  local raw="$1" response
+  [[ -n "$raw" ]] || return 0
+  if [[ "$raw" =~ ^[A-Za-z0-9_-]{8,}$ ]]; then
+    printf '%s' "$raw"
+    return 0
+  fi
+  response=$(curl -fsS "https://api.todoist.com/api/v1/projects" \
+    -H "Authorization: Bearer ${TODOIST_API_TOKEN}" \
+    -H "Content-Type: application/json")
+  RAW_PROJECT="$raw" RESPONSE="$response" python3 <<'PY'
+import json, os, sys
+raw = os.environ['RAW_PROJECT'].strip()
+raw_l = raw.lower()
+resp = json.loads(os.environ['RESPONSE'])
+projects = resp if isinstance(resp, list) else resp.get('results', [])
+for p in projects:
+    if str(p.get('id', '')) == raw or str(p.get('name', '')).strip().lower() == raw_l:
+        print(p.get('id', ''))
+        raise SystemExit(0)
+print(raw)
+PY
+}
+
+if [[ -n $project_id ]]; then
+  project_id="$(resolve_project_id "$project_id")"
 fi
 
 payload=$(CONTENT="$content" DESCRIPTION="$description" DUE_STRING="$due_string" PROJECT_ID="$project_id" PRIORITY="$priority" python3 <<'PY'

@@ -81,9 +81,15 @@ input() {
 }
 
 require_token() {
+  if [[ -z ${TODOIST_API_TOKEN:-} && -f "$HOME/.config/secrets/env" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$HOME/.config/secrets/env"
+    set +a
+  fi
   if [[ -z ${TODOIST_API_TOKEN:-} ]]; then
     err "Variável TODOIST_API_TOKEN não definida."
-    echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.zshrc.local" >&2
+    echo "Sugestão: export TODOIST_API_TOKEN='...' em ~/.config/secrets/env" >&2
     exit 1
   fi
 }

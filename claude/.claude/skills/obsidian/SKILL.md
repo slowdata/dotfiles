@@ -102,11 +102,11 @@ PGR/
 
 Templates simples — um por tipo, só para não intimidar na criação manual:
 
-- `Templates/Daily.md`: `Foco`, `Reuniões`, `Notas`, `Ações TickTick`.
-- `Templates/Reunião.md`: `Objetivo`, `Notas`, `Decisões`, `Ações TickTick`, `Fontes`.
+- `Templates/Daily.md`: `Foco`, `Reuniões`, `Notas`, `Ações Todoist`.
+- `Templates/Reunião.md`: `Objetivo`, `Notas`, `Decisões`, `Ações Todoist`, `Fontes`.
 - `Templates/Nota.md`: `Notas`, `Links`.
-- `Templates/Ticket.md`: `Pedido`, `Diagnóstico`, `Feito`, `Resultado`, `Ações TickTick`.
-- `Templates/Pedido Email.md`: `Pedido`, `Contexto`, `Resposta / resultado`, `Ações TickTick`.
+- `Templates/Ticket.md`: `Pedido`, `Diagnóstico`, `Feito`, `Resultado`, `Ações Todoist`.
+- `Templates/Pedido Email.md`: `Pedido`, `Contexto`, `Resposta / resultado`, `Ações Todoist`.
 - `Templates/Projeto.md`, `Templates/Padrão.md`, `Templates/Servidor.md`: versões curtas, sem frontmatter pesado.
 
 Notas geradas por IA podem ser mais ricas e bonitas: callouts Obsidian (`[!summary]`, `[!important]`, `[!todo]`, `[!question]`), resumo, subtítulos, decisões, follow-ups, fontes e palavras-chave. A regra de simplicidade aplica-se ao template vazio, não ao resultado sintetizado.
@@ -125,7 +125,7 @@ Usar variáveis Templater simples nos templates: `<% tp.date.now("YYYY-MM-DD") %
 
 - **Obsidian PGR é o destino ativo para notas de trabalho.**
 - **Logseq está congelado**: usar só como arquivo/consulta/migração, salvo pedido explícito do utilizador.
-- **TickTick é o task manager**: não criar um sistema paralelo de tarefas no Obsidian. Secções “Ações para TickTick” são staging temporário.
+- **Todoist é o task manager**: não criar um sistema paralelo de tarefas no Obsidian. Secções “Ações Todoist” são staging temporário.
 - **Fontes brutas de reuniões** ficam em `/home/dias/Sync/Reunioes/` (`.opus`, `.wav` temporário, `.md` transcrição).
 - **Daily note** (`00_Daily/YYYY-MM-DD.md`) é índice leve do dia, não repositório de detalhes.
 - **Reunião de projeto** vai para a pasta de reuniões já existente do projeto (`Reuniões` ou `Reunioes`).
@@ -261,11 +261,11 @@ obsidian rename path="nota.md" name="novo nome" vault=PGR
 
 ### Tarefas
 
-O sistema principal de tarefas do Dias é **TickTick**.
+O sistema principal de tarefas do Dias é **Todoist**.
 
 - Não criar tarefas como sistema de tracking no Obsidian por defeito.
-- Em notas de reunião/tickets, usar apenas secção “Ações para TickTick” como staging temporário.
-- Se houver ação real com compromisso, sugerir/enviar para TickTick; a nota Obsidian deve guardar contexto e decisão, não gerir execução.
+- Em notas de reunião/tickets, usar apenas secção “Ações Todoist” como staging temporário.
+- Se houver ação real com compromisso, sugerir/enviar para Todoist; a nota Obsidian deve guardar contexto e decisão, não gerir execução.
 - `03_Tarefas/` é legado/apoio; não usar como destino principal sem pedido explícito.
 
 ### Daily notes
