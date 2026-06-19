@@ -125,7 +125,8 @@ launch_with_footclient() {
   done
 
   local -a terminal_env=(TERM_PROGRAM=foot FOOT_TERMINAL=1 COLORTERM=truecolor)
-  local -a foot_args=(-N --client-environment --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock" --term=foot)
+  # Use a common TERM so SSH sessions work on hosts without Foot terminfo.
+  local -a foot_args=(-N --client-environment --server-socket="${XDG_RUNTIME_DIR:-/tmp}/foot.sock" --term=xterm-256color)
   [[ -n "$dir" ]] && foot_args+=(--working-directory="$dir")
   [[ -n "$title" ]] && foot_args+=(--title="$title")
   [[ -n "$app_id" ]] && foot_args+=(--app-id="$app_id")
