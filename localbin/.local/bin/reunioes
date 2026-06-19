@@ -32,6 +32,7 @@ QC_MIN_MAX_VOLUME_DB="${QC_MIN_MAX_VOLUME_DB:--35}"
 ARCHIVE_INDEX="${ARCHIVE_INDEX:-$REUNIOES_DIR/.arquivo-audio.tsv}"
 OBSIDIAN_PGR_DIR="${OBSIDIAN_PGR_DIR:-$HOME/Sync/Obsidian/PGR}"
 OBSIDIAN_PERSONAL_DIR="${OBSIDIAN_PERSONAL_DIR:-$HOME/Sync/Obsidian/Personal}"
+OBSIDIAN_DAILY_DIR="${OBSIDIAN_DAILY_DIR:-$OBSIDIAN_PGR_DIR/daily}"
 TODOIST_ADD_BIN="${TODOIST_ADD_BIN:-todoist-add}"
 TODOIST_PROJECTS_BIN="${TODOIST_PROJECTS_BIN:-todoist-projects}"
 TODOIST_TUI_BIN="${TODOIST_TUI_BIN:-todoist-tui}"
@@ -64,6 +65,129 @@ load_todoist_env() {
 }
 
 use_gum() { has gum && [[ -t 0 && -t 1 ]] && ( : </dev/tty ) 2>/dev/null; }
+use_fzf() { has fzf && ( : </dev/tty ) 2>/dev/null; }
+
+print_tty() {
+  if ( : >/dev/tty ) 2>/dev/null; then printf '%s\n' "$*" >/dev/tty
+  else printf '%s\n' "$*" >&2; fi
+}
+info_tty() { print_tty "ℹ️  $*"; }
+warn_tty() { print_tty "⚠️  $*"; }
+
+# Caminho curto para menus/preview.
+display_path() {
+  local path="$1"
+  if [[ "$path" == "$OBSIDIAN_PGR_DIR/"* ]]; then printf '%s' "${path#$OBSIDIAN_PGR_DIR/}"
+  elif [[ "$path" == "$OBSIDIAN_PERSONAL_DIR/"* ]]; then printf 'Personal/%s' "${path#$OBSIDIAN_PERSONAL_DIR/}"
+  elif [[ "$path" == "$REUNIOES_DIR/"* ]]; then printf '%s' "${path#$REUNIOES_DIR/}"
+  elif [[ "$path" == "$HOME/"* ]]; then printf '~/%s' "${path#$HOME/}"
+  else printf '%s' "$path"; fi
+}
+
+# Preview leve para fzf e confirmação manual: mostra caminho + primeiro bloco útil.
+markdown_preview() {
+  local path="$1"
+  printf '📄 %s\n' "$path"
+  if [[ -d "$path" ]]; then
+    echo
+    echo "Notas recentes nesta pasta:"
+    find "$path" -maxdepth 1 -type f -name '*.md' -printf '%TY-%Tm-%Td %TH:%TM  %f\n' 2>/dev/null \
+      | sort -r | head -30
+    return 0
+  fi
+  if [[ ! -f "$path" ]]; then echo "Não existe."; return 0; fi
+  stat -c 'Modificado: %y' "$path" 2>/dev/null | cut -d. -f1
+  printf 'Tamanho: %s bytes\n\n' "$(stat -c '%s' "$path" 2>/dev/null || printf '0')"
+  awk '
+    BEGIN { fm=0; lines=0; started=0; blanks_after_start=0; shown_heading=0 }
+    NR == 1 && $0 == "---" { fm=1; next }
+    fm && $0 == "---" { fm=0; next }
+    fm { next }
+    /^[[:space:]]*$/ { if (started) { blanks_after_start++; if (blanks_after_start >= 1 && lines >= 4) exit } ; next }
+    /^```/ { next }
+    {
+      line=$0; sub(/\r$/, "", line)
+      if (line ~ /^#/ && shown_heading) next
+      if (line ~ /^#/) shown_heading=1
+      if (length(line) > 180) line=substr(line, 1, 177) "..."
+      print line
+      lines++; started=1
+      if (lines >= 14) exit
+    }
+    END { if (lines == 0) print "(sem texto útil nos primeiros parágrafos)" }
+  ' "$path" 2>/dev/null
+}
+
+show_markdown_preview_tty() {
+  local path="$1"
+  if ( : >/dev/tty ) 2>/dev/null; then markdown_preview "$path" >/dev/tty
+  else markdown_preview "$path" >&2; fi
+}
+
+clean_manual_path() {
+  local path="$*" first last
+  path="${path//$'\r'/}"
+  path="${path#"${path%%[![:space:]]*}"}"
+  path="${path%"${path##*[![:space:]]}"}"
+  [[ -z "$path" ]] && return 0
+
+  if [[ "$path" == \[\[*\]\] ]]; then
+    path="${path#\[\[}"; path="${path%\]\]}"; path="${path%%|*}"; path="${path%%#*}"
+  fi
+  [[ "$path" == file://* ]] && path="${path#file://}"
+
+  if (( ${#path} >= 2 )); then
+    first="${path:0:1}"; last="${path: -1}"
+    if [[ ( "$first" == "'" && "$last" == "'" ) || ( "$first" == '"' && "$last" == '"' ) || ( "$first" == '`' && "$last" == '`' ) ]]; then
+      path="${path:1:${#path}-2}"
+    fi
+  fi
+
+  path="${path//\\ / }"
+  path="${path//\\(/(}"; path="${path//\\)/)}"
+  path="${path//\\[/[}"; path="${path//\\]/]}"
+  case "$path" in
+    '~') path="$HOME" ;;
+    '~/'*) path="$HOME/${path#\~/}" ;;
+  esac
+  printf '%s' "$path"
+}
+
+append_unique_candidate() {
+  local -n _candidates="$1"
+  local candidate="$2" existing
+  [[ -n "$candidate" ]] || return 0
+  for existing in "${_candidates[@]}"; do [[ "$existing" == "$candidate" ]] && return 0; done
+  _candidates+=("$candidate")
+}
+
+append_markdown_candidate() {
+  local array_name="$1" candidate="$2"
+  append_unique_candidate "$array_name" "$candidate"
+  [[ "$candidate" == *.md ]] || append_unique_candidate "$array_name" "$candidate.md"
+}
+
+resolve_markdown_manual_paths() {
+  local manual="$1" raw root candidate
+  shift || true
+  local roots=("$@") candidates=()
+  raw="$(clean_manual_path "$manual")"
+  [[ -n "$raw" ]] || return 1
+
+  if [[ "$raw" == /* ]]; then
+    append_markdown_candidate candidates "$raw"
+  else
+    append_markdown_candidate candidates "$PWD/$raw"
+    for root in "${roots[@]}"; do [[ -d "$root" ]] && append_markdown_candidate candidates "$root/$raw"; done
+  fi
+
+  {
+    for candidate in "${candidates[@]}"; do
+      [[ -f "$candidate" ]] && realpath -m -- "$candidate" 2>/dev/null
+    done
+    true
+  } | awk '!seen[$0]++'
+}
 
 # Cabeçalho em caixa. Cores herdadas do tema Omarchy via vars GUM_* / BORDER_FOREGROUND.
 style() {
@@ -96,6 +220,8 @@ confirm() {
 choose() {
   local header="$1"; shift
   if use_gum; then gum choose --header "$header" --height 15 "$@" </dev/tty
+  elif use_fzf; then
+    printf '%s\n' "$@" | fzf --height 40% --layout=reverse --border --prompt "# " --header "$header"
   else
     local opt
     echo "$header" >/dev/tty
@@ -444,11 +570,66 @@ all_transcription_files() {
     -printf '%T@\t%p\n' 2>/dev/null | sort -nr | cut -f2-
 }
 
+transcription_files_search() {
+  local query="$1" limit="${2:-40}" path haystack count=0
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    haystack="$(display_path "$path")"
+    if [[ -z "$query" || "${haystack,,}" == *"${query,,}"* ]] || grep -qiF -- "$query" "$path" 2>/dev/null; then
+      printf '%s\n' "$path"
+      count=$((count + 1))
+      (( count >= limit )) && break
+    fi
+  done < <(all_transcription_files)
+}
+
+resolve_transcription_manual_paths() {
+  local manual="$1" raw path base target
+  raw="$(clean_manual_path "$manual")"
+  [[ -n "$raw" ]] || return 1
+  {
+    resolve_markdown_manual_paths "$raw" "$TRANSCRICOES_DIR" "$REUNIOES_DIR"
+    if [[ "$raw" != */* ]]; then
+      target="$(basename "${raw%.md}")"
+      while IFS= read -r path; do
+        base="$(basename "${path%.md}")"
+        [[ "${base,,}" == "${target,,}" || "${base,,}" == *"${target,,}"* ]] && printf '%s\n' "$path"
+      done < <(all_transcription_files)
+    fi
+    true
+  } | awk '!seen[$0]++'
+}
+
 choose_transcription_file() {
-  local prompt="$1"
-  mapfile -t files < <(all_transcription_files)
-  if (( ${#files[@]} == 0 )); then warn "Não há transcrições em $TRANSCRICOES_DIR."; return 1; fi
-  choose "$prompt" "${files[@]}"
+  local prompt="$1" choice query manual
+  local files=() all_files=()
+  mapfile -t all_files < <(all_transcription_files)
+  if (( ${#all_files[@]} == 0 )); then warn_tty "Não há transcrições em $TRANSCRICOES_DIR."; return 1; fi
+
+  while true; do
+    choice="$(choose "$prompt — como escolher?" \
+      "Últimas 15 transcrições" "Pesquisar por data/texto" "Introduzir caminho manual" "Cancelar")" || return 1
+    case "$choice" in
+      "Últimas 15 transcrições")
+        files=("${all_files[@]:0:15}")
+        choose_path_from_files "$prompt — últimas 15" "${files[@]}" && return 0
+        ;;
+      "Pesquisar por data/texto")
+        query="$(input "Texto/data a procurar na transcrição" "")" || return 1
+        mapfile -t files < <(transcription_files_search "$query" 40)
+        if (( ${#files[@]} == 0 )); then warn_tty "Sem transcrições encontradas para: $query"; continue; fi
+        choose_path_from_files "$prompt — pesquisa: $query" "${files[@]}" && return 0
+        ;;
+      "Introduzir caminho manual")
+        manual="$(input "Caminho ou nome da transcrição" "")" || return 1
+        [[ -z "$manual" ]] && continue
+        mapfile -t files < <(resolve_transcription_manual_paths "$manual")
+        if (( ${#files[@]} == 0 )); then warn_tty "Transcrição não existe: $manual"; continue; fi
+        choose_path_from_files "$prompt — caminho manual" "${files[@]}" && return 0
+        ;;
+      "Cancelar"|"") return 1 ;;
+    esac
+  done
 }
 
 audio_for_key() {
@@ -555,15 +736,21 @@ EOF
 }
 
 obsidian_meeting_roots() {
+  # Estrutura atual do vault PGR (2026): projetos/<projeto>/reunioes e reunioes/.
+  # Mantém compatibilidade com a estrutura antiga 01_Projetos/02_Reuniões.
+  [[ -d "$OBSIDIAN_PGR_DIR/projetos" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/projetos"
+  [[ -d "$OBSIDIAN_PGR_DIR/reunioes" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/reunioes"
+  [[ -d "$OBSIDIAN_PGR_DIR/reuniões" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/reuniões"
   [[ -d "$OBSIDIAN_PGR_DIR/01_Projetos" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/01_Projetos"
   [[ -d "$OBSIDIAN_PGR_DIR/02_Reuniões" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/02_Reuniões"
+  return 0
 }
 
 obsidian_meeting_note_records() {
   mapfile -t roots < <(obsidian_meeting_roots)
   (( ${#roots[@]} > 0 )) || return 0
   find "${roots[@]}" -type f -name '*.md' -printf '%T@\t%p\n' 2>/dev/null \
-    | awk -F '\t' '$2 ~ /\/(Reunioes|Reuniões)\// || $2 ~ /\/02_Reuniões\// { print }' \
+    | awk -F '\t' '($2 ~ /\/([Rr]eunioes|[Rr]euniões)\// || $2 ~ /\/02_Reuniões\// || $2 ~ /\/02_reuniões\//) && $2 !~ /\/index\.md$/ { print }' \
     | sort -nr
 }
 
@@ -599,9 +786,14 @@ obsidian_meeting_notes_search() {
 
 obsidian_meeting_dirs() {
   {
+    [[ -d "$OBSIDIAN_PGR_DIR/reunioes" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/reunioes"
+    [[ -d "$OBSIDIAN_PGR_DIR/reuniões" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/reuniões"
     [[ -d "$OBSIDIAN_PGR_DIR/02_Reuniões" ]] && printf '%s\n' "$OBSIDIAN_PGR_DIR/02_Reuniões"
-    [[ -d "$OBSIDIAN_PGR_DIR/01_Projetos" ]] && find "$OBSIDIAN_PGR_DIR/01_Projetos" -type d \( -name 'Reunioes' -o -name 'Reuniões' \) 2>/dev/null
-  } | sort
+    for root in "$OBSIDIAN_PGR_DIR/projetos" "$OBSIDIAN_PGR_DIR/01_Projetos"; do
+      [[ -d "$root" ]] && find "$root" -type d \( -iname 'reunioes' -o -iname 'reuniões' \) 2>/dev/null
+    done
+    true
+  } | sort -u
 }
 
 obsidian_meeting_notes_in_dir() {
@@ -611,18 +803,37 @@ obsidian_meeting_notes_in_dir() {
 }
 
 choose_path_from_files() {
-  local header="$1" choice rel i
+  local header="$1" choice rel i selected
   shift
-  local files=("$@") displays=()
+  local files=("$@") displays=() rows=()
   (( ${#files[@]} > 0 )) || return 1
   for i in "${!files[@]}"; do
-    rel="${files[$i]#$OBSIDIAN_PGR_DIR/}"
+    rel="$(display_path "${files[$i]}")"
     displays+=("$rel")
+    rows+=("$rel"$'\t'"${files[$i]}")
   done
-  if (( ${#files[@]} == 1 )); then
-    printf '%s\n' "${files[0]}"
-    return 0
+
+  if use_fzf; then
+    export -f markdown_preview
+    choice="$(printf '%s\n' "${rows[@]}" | fzf \
+      --height 85% --layout=reverse --border --prompt "󰍉 " \
+      --header "$header (↑/↓ muda; Enter escolhe; Esc cancela)" \
+      --with-nth=1 --delimiter=$'\t' \
+      --preview 'bash -lc '\''markdown_preview "$1"'\'' _ {2}' \
+      --preview-window='right,55%,wrap')" || return 1
+    selected="${choice#*$'\t'}"
+    [[ -n "$selected" ]] && { printf '%s\n' "$selected"; return 0; }
+    return 1
   fi
+
+  if (( ${#files[@]} == 1 )); then
+    print_tty ""
+    print_tty "$header"
+    show_markdown_preview_tty "${files[0]}"
+    confirm "Usar este item?" && { printf '%s\n' "${files[0]}"; return 0; }
+    return 1
+  fi
+
   if use_gum; then
     choice="$(printf '%s\n' "${displays[@]}" | gum filter --height 18 --placeholder "$header" --prompt "󰍉 " </dev/tty)" || return 1
   else
@@ -630,11 +841,34 @@ choose_path_from_files() {
   fi
   for i in "${!displays[@]}"; do
     if [[ "${displays[$i]}" == "$choice" ]]; then
-      printf '%s\n' "${files[$i]}"
-      return 0
+      print_tty ""
+      show_markdown_preview_tty "${files[$i]}"
+      confirm "Usar este item?" && { printf '%s\n' "${files[$i]}"; return 0; }
+      return 1
     fi
   done
   return 1
+}
+
+resolve_obsidian_manual_paths() {
+  local manual="$1" raw path base target
+  raw="$(clean_manual_path "$manual")"
+  [[ -n "$raw" ]] || return 1
+  {
+    resolve_markdown_manual_paths "$raw" "$OBSIDIAN_PGR_DIR" "$OBSIDIAN_PERSONAL_DIR" \
+      "$OBSIDIAN_PGR_DIR/projetos" "$OBSIDIAN_PGR_DIR/reunioes" "$OBSIDIAN_PGR_DIR/reuniões" \
+      "$OBSIDIAN_PGR_DIR/01_Projetos" "$OBSIDIAN_PGR_DIR/02_Reuniões"
+    [[ "$raw" == PGR/* ]] && resolve_markdown_manual_paths "${raw#PGR/}" "$OBSIDIAN_PGR_DIR"
+    [[ "$raw" == Personal/* ]] && resolve_markdown_manual_paths "${raw#Personal/}" "$OBSIDIAN_PERSONAL_DIR"
+    if [[ "$raw" != */* ]]; then
+      target="$(basename "${raw%.md}")"
+      while IFS=$'\t' read -r _ path; do
+        base="$(basename "${path%.md}")"
+        [[ "${base,,}" == "${target,,}" || "${base,,}" == *"${target,,}"* ]] && printf '%s\n' "$path"
+      done < <(obsidian_meeting_note_records)
+    fi
+    true
+  } | awk '!seen[$0]++'
 }
 
 choose_obsidian_meeting_note() {
@@ -643,9 +877,9 @@ choose_obsidian_meeting_note() {
 
   day="$(date_from_path "$source")"
   if [[ -n "$day" ]]; then
-    mapfile -t files < <(obsidian_meeting_notes_for_date "$day" 20)
+    mapfile -t files < <(obsidian_meeting_notes_for_date "$day" 12)
     if (( ${#files[@]} > 0 )); then
-      info "A mostrar só notas de reunião de $day (${#files[@]}). Escape para outros métodos."
+      info_tty "Notas de reunião de $day (${#files[@]}). Esc cancela e abre outros métodos."
       choose_path_from_files "$prompt — $day" "${files[@]}" && return 0
     fi
   fi
@@ -655,30 +889,34 @@ choose_obsidian_meeting_note() {
       "Pesquisar por texto/título" "Últimas 20 reuniões" "Escolher projeto/pasta" "Introduzir caminho manual" "Cancelar")" || return 1
     case "$choice" in
       "Pesquisar por texto/título")
-        query="$(input "Texto a procurar no caminho/título" "")" || return 1
-        mapfile -t files < <(obsidian_meeting_notes_search "$query" 40)
-        if (( ${#files[@]} == 0 )); then warn "Sem notas encontradas para: $query"; continue; fi
+        query="$(input "Texto/data a procurar no caminho/título/conteúdo" "")" || return 1
+        mapfile -t files < <(obsidian_meeting_notes_search "$query" 30)
+        if (( ${#files[@]} == 0 )); then warn_tty "Sem notas encontradas para: $query"; continue; fi
         choose_path_from_files "$prompt — pesquisa: $query" "${files[@]}" && return 0
         ;;
       "Últimas 20 reuniões")
         mapfile -t files < <(obsidian_meeting_notes 20)
-        if (( ${#files[@]} == 0 )); then warn "Não encontrei notas de reunião no Obsidian PGR."; return 1; fi
+        if (( ${#files[@]} == 0 )); then warn_tty "Não encontrei notas de reunião no Obsidian PGR."; return 1; fi
         choose_path_from_files "$prompt — últimas 20" "${files[@]}" && return 0
         ;;
       "Escolher projeto/pasta")
         mapfile -t dirs < <(obsidian_meeting_dirs)
-        if (( ${#dirs[@]} == 0 )); then warn "Não encontrei pastas de reuniões."; continue; fi
+        if (( ${#dirs[@]} == 0 )); then warn_tty "Não encontrei pastas de reuniões."; continue; fi
         dir="$(choose_path_from_files "Pasta de reuniões" "${dirs[@]}")" || continue
         mapfile -t files < <(obsidian_meeting_notes_in_dir "$dir" 30)
-        if (( ${#files[@]} == 0 )); then warn "Sem notas .md nesta pasta: ${dir#$OBSIDIAN_PGR_DIR/}"; continue; fi
-        choose_path_from_files "$prompt — ${dir#$OBSIDIAN_PGR_DIR/}" "${files[@]}" && return 0
+        if (( ${#files[@]} == 0 )); then warn_tty "Sem notas .md nesta pasta: $(display_path "$dir")"; continue; fi
+        choose_path_from_files "$prompt — $(display_path "$dir")" "${files[@]}" && return 0
         ;;
       "Introduzir caminho manual")
-        manual="$(input "Caminho da nota" "")" || return 1
+        manual="$(input "Caminho, nome ou [[wikilink]] da nota" "")" || return 1
         [[ -z "$manual" ]] && continue
-        [[ "$manual" != /* ]] && manual="$OBSIDIAN_PGR_DIR/$manual"
-        if [[ -f "$manual" ]]; then printf '%s\n' "$manual"; return 0; fi
-        warn "Nota não existe: $manual"
+        mapfile -t files < <(resolve_obsidian_manual_paths "$manual")
+        if (( ${#files[@]} == 0 )); then
+          warn_tty "Nota não existe: $manual"
+          warn_tty "Podes usar caminho absoluto, relativo a $OBSIDIAN_PGR_DIR, ~/, ou [[wikilink]]."
+          continue
+        fi
+        choose_path_from_files "$prompt — caminho manual" "${files[@]}" && return 0
         ;;
       "Cancelar"|"") return 1 ;;
     esac
@@ -692,7 +930,7 @@ note_date() {
 }
 
 ensure_daily_note() {
-  local day="$1" daily="$OBSIDIAN_PGR_DIR/00_Daily/${day}.md"
+  local day="$1" daily="$OBSIDIAN_DAILY_DIR/${day}.md"
   if [[ ! -f "$daily" ]]; then
     mkdir -p "$(dirname "$daily")"
     cat > "$daily" <<EOF
