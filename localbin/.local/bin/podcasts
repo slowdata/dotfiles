@@ -91,6 +91,21 @@ input() {
   fi
 }
 
+textarea() {
+  local prompt="$1" line value=""
+  if use_gum; then
+    gum write --header "$prompt" --placeholder "Opcional. Ex.: focar em música/produção, ideias pessoais, informática, links a criar..." --height 8 </dev/tty
+  else
+    echo "$prompt" >/dev/tty
+    echo "Opcional. Escreve várias linhas; termina com uma linha só com '.'" >/dev/tty
+    while IFS= read -r line </dev/tty; do
+      [[ "$line" == "." ]] && break
+      value+="${line}"$'\n'
+    done
+    printf '%s' "$value"
+  fi
+}
+
 init_project_dirs() {
   mkdir -p "$TRANSCRICOES_DIR" "$MP3_DIR" "$OPUS_DIR" "$LOG_DIR" "$BACKUP_DIR"
   ensure_archive_index
@@ -404,18 +419,26 @@ choose_folder() {
 
 # ai_distill <transcricao.md> <titulo> <fonte> <nota_destino.md>
 ai_distill() {
-  local md="$1" title="$2" source="$3" note="$4" sys rc claude_cmd
+  local md="$1" title="$2" source="$3" note="$4" hints="${5:-}" sys rc claude_cmd extra_hints=""
   [[ -f "$md" ]] || { err "Transcrição não existe: $md"; return 1; }
   has claude || { err "claude CLI não encontrado."; return 1; }
   mkdir -p "$(dirname "$note")"
   info "A destilar com IA (pode demorar ~15-40s)..."
   sys="És editor de notas de conhecimento permanente. Transformas transcrições de podcast (têm timestamps e erros de reconhecimento de fala) numa nota densa e acionável em ${PODCASTS_NOTE_LANG}. Devolves SÓ a nota em Markdown, sem preâmbulo nem comentários. Corriges erros óbvios de transcrição. NUNCA inventas factos que não estejam na transcrição."
+  if [[ -n "$hints" ]]; then
+    extra_hints="$(cat <<EOF
+
+Indicações do Dias para esta nota (prioritárias, mas sem inventar factos):
+${hints}
+EOF
+)"
+  fi
   claude_cmd=(claude -p)
   [[ -n "$PODCASTS_AI_MODEL" ]] && claude_cmd+=(--model "$PODCASTS_AI_MODEL")
   set +e
   {
     cat <<EOF
-Transforma a transcrição no fim numa nota permanente de Obsidian, com este formato EXATO:
+Transforma a transcrição no fim numa nota permanente de Obsidian, com este formato EXATO:${extra_hints}
 
 ---
 tags: [podcast, referencia]
@@ -442,9 +465,9 @@ status: destilado-ia
 (2-4 frases marcantes na língua ORIGINAL do episódio, cada uma com o timestamp [mm:ss] mais próximo)
 
 ## Ligações
-(3-7 wikilinks Obsidian úteis para ligar esta nota a temas/conceitos; cria links conceptuais curtos baseados na transcrição, ex.: [[hábitos]], [[finanças pessoais]], [[treino]]. Se não houver material suficiente, OMITE esta secção.)
+(3-7 wikilinks Obsidian úteis para ligar esta nota a temas/conceitos; cria links conceptuais curtos baseados na transcrição, ex.: [[hábitos]], [[finanças pessoais]], [[treino]], [[música]], [[informática]]. Se não houver material suficiente, OMITE esta secção.)
 
-Regras: densa, sem encher. Omite secções sem material. Mantém os timestamps nas citações. Acrescenta 2-5 tags temáticas ao frontmatter e ajusta categoria com base no conteúdo; usa "vida-pratica" para life hacks, hábitos, organização pessoal e decisões de vida. Não deixes placeholders vazios como [[ ]] ou "-". Não escrevas nada fora da nota.
+Regras: densa, sem encher. Omite secções sem material. Mantém os timestamps nas citações. Acrescenta 2-5 tags temáticas ao frontmatter e ajusta categoria com base no conteúdo. Categorias frequentes do Dias: "musica" para música/bandas/álbuns/produção musical; "vida-pratica" para life hacks, hábitos, organização pessoal e decisões de vida; "informatica" para informática, programação, Linux, ferramentas e tecnologia; "sports" para treino/saúde física. Não deixes placeholders vazios como [[ ]] ou "-". Não escrevas nada fora da nota.
 
 === TRANSCRIÇÃO ===
 EOF
@@ -465,7 +488,7 @@ EOF
 
 # Oferece, no fim de uma transcrição, como criar a nota.
 finish_note() {
-  local key="$1" title="$2" source="$3" mode folder slug note md
+  local key="$1" title="$2" source="$3" mode folder slug note md hints
   mode="$(choose "Criar nota a partir desta transcrição?" \
     "Destilar com IA (nota pronta)" "Molde vazio" "Agora não")" || return 0
   case "$mode" in
@@ -475,7 +498,8 @@ finish_note() {
       note="$VAULT_DIR/$folder/${slug:-nota}.md"
       if [[ -e "$note" ]]; then confirm "Já existe $note. Sobrescrever?" || return 0; fi
       md="$(md_for_key "$key")"
-      ai_distill "$md" "$title" "$source" "$note" && { confirm "Abrir no editor?" && open_in_editor "$note"; }
+      hints="$(textarea "Indicações opcionais para o agente IA deste podcast")"
+      ai_distill "$md" "$title" "$source" "$note" "$hints" && { confirm "Abrir no editor?" && open_in_editor "$note"; }
       ;;
     "Molde vazio") make_note "$key" "$title" "$source" ;;
     *) : ;;
@@ -743,7 +767,7 @@ note_from_existing() {
 }
 
 distill_existing() {
-  local md title source folder slug note
+  local md title source folder slug note hints
   md="$(choose_transcription "Transcrição a destilar com IA")" || { pause; return; }
   title="$(input "Título da nota" "$(title_from_md "$md")")"
   source="$(source_from_md "$md")"; [[ -n "$source" ]] || source="$md"
@@ -751,7 +775,8 @@ distill_existing() {
   slug="$(slugify "$title")"
   note="$VAULT_DIR/$folder/${slug:-nota}.md"
   if [[ -e "$note" ]]; then confirm "Já existe $note. Sobrescrever?" || { pause; return; }; fi
-  ai_distill "$md" "$title" "$source" "$note" && { confirm "Abrir no editor?" && open_in_editor "$note"; }
+  hints="$(textarea "Indicações opcionais para o agente IA deste podcast")"
+  ai_distill "$md" "$title" "$source" "$note" "$hints" && { confirm "Abrir no editor?" && open_in_editor "$note"; }
   pause
 }
 
