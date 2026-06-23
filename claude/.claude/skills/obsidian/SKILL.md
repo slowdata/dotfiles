@@ -130,7 +130,7 @@ Usar variáveis Templater simples nos templates: `<% tp.date.now("YYYY-MM-DD") %
 - **Obsidian PGR é o destino ativo para notas de trabalho.**
 - **Logseq está congelado**: usar só como arquivo/consulta/migração, salvo pedido explícito do utilizador.
 - **Todoist é o task manager**: não criar um sistema paralelo de tarefas no Obsidian. Secções “Ações Todoist” são staging temporário.
-- **Fontes brutas de reuniões** ficam em `/home/dias/Sync/reunioes/` (`.opus`, `.wav` temporário, `.md` transcrição).
+- **Fontes brutas de reuniões** ficam em `/home/dias/Sync/Reunioes/` (`.opus`, `.wav` temporário, `.md` transcrição).
 - **Daily note** (`daily/YYYY-MM-DD.md`) é índice leve do dia, não repositório de detalhes.
 - **Reunião de projeto** vai para `projetos/<projeto>/reunioes/`.
 - **Reunião sem projeto claro** vai para `reunioes/YYYY-MM-DD-titulo.md`.
